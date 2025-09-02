@@ -4,7 +4,7 @@
     <div class="pdf-header">
       <div class="pdf-controls">
         <!-- Navigation Controls -->
-        <div class="nav-controls">
+        <!--div class="nav-controls">
           <el-button 
             @click="previousPage" 
             :disabled="currentPage <= 1"
@@ -22,16 +22,16 @@
             :icon="ArrowRight"
           >
           </el-button>
-        </div>
+        </div-->
 
         <!-- Zoom Controls -->
-        <div class="zoom-controls">
+        <!--div class="zoom-controls">
           <el-button @click="zoomOut" size="small" :icon="ZoomOut">-</el-button>
           <span class="zoom-level">{{ Math.round(zoom * 100) }}%</span>
           <el-button @click="zoomIn" size="small" :icon="ZoomIn">+</el-button>
           <el-button @click="fitToWidth" size="small">Fit Width</el-button>
           <el-button @click="fitToPage" size="small">Fit Page</el-button>
-        </div>
+        </div-->
 
         <!-- Search Controls -->
         <div class="search-controls">

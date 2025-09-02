@@ -11,7 +11,6 @@
             size="small"
             :icon="ArrowLeft"
           >
-            Previous
           </el-button>
           <span class="page-info">
             Page {{ currentPage }} of {{ totalPages }}
@@ -22,7 +21,6 @@
             size="small"
             :icon="ArrowRight"
           >
-            Next
           </el-button>
         </div>
 

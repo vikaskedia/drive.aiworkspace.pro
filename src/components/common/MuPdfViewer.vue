@@ -560,54 +560,32 @@ function highlightSearchResults() {
       results.forEach(result => {
         const isActive = result.index === currentSearchResult.value;
         
-        // Try a simpler approach - use the coordinates directly first
-        // MuPDF coordinates might already be in the right scale
-        let scaledX = result.x;
-        let scaledY = result.y;
-        let scaledWidth = result.width;
-        let scaledHeight = result.height;
-        
-        // If the coordinates seem too small, scale them
-        if (result.x < 100 && result.y < 100) {
-          // These are likely PDF points, need scaling
-          const scaleX = pageCanvas.width / 595; // Standard A4 width
-          const scaleY = pageCanvas.height / 842; // Standard A4 height
-          
-          scaledX = result.x * scaleX;
-          scaledY = result.y * scaleY;
-          scaledWidth = result.width * scaleX;
-          scaledHeight = result.height * scaleY;
-        }
+        // The coordinates from MuPDF are already in the correct scale
+        // No need for additional scaling since we're rendering at the right size
+        const x = result.x;
+        const y = result.y;
+        const width = result.width;
+        const height = result.height;
         
         // Set highlight color - make it more visible
-        ctx.fillStyle = isActive ? 'rgba(255, 255, 0, 0.9)' : 'rgba(255, 255, 0, 0.6)';
-        ctx.strokeStyle = isActive ? '#ff0000' : '#ff6600';
-        ctx.lineWidth = isActive ? 3 : 2;
+        ctx.fillStyle = isActive ? 'rgba(255, 255, 0, 0.2)' : 'rgba(255, 255, 0, 0.2)';
+        //ctx.strokeStyle = isActive ? '#ff0000' : '#ff6600';
+        //ctx.lineWidth = isActive ? 3 : 2;
         
         // Draw highlight rectangle
-        ctx.fillRect(scaledX, scaledY, scaledWidth, scaledHeight);
-        ctx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+        ctx.fillRect(x, y, width, height);
+        ctx.strokeRect(x, y, width, height);
         
         // Add a small dot at the center for debugging
-        ctx.fillStyle = '#ff0000';
+        /*ctx.fillStyle = '#ff0000';
         ctx.beginPath();
-        ctx.arc(scaledX + scaledWidth/2, scaledY + scaledHeight/2, 3, 0, 2 * Math.PI);
+        ctx.arc(x + width/2, y + height/2, 3, 0, 2 * Math.PI);
         ctx.fill();
-        
-        // Add a test highlight in the top-left corner to verify highlighting works
-        if (result.index === 0) {
-          ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
-          ctx.fillRect(10, 10, 100, 30);
-          ctx.fillStyle = '#ffffff';
-          ctx.font = '12px Arial';
-          ctx.fillText('TEST HIGHLIGHT', 15, 25);
-        }
         
         console.log(`Highlighted result ${result.index} on page ${pageNum}:`, {
           isActive,
-          original: { x: result.x, y: result.y, width: result.width, height: result.height },
-          scaled: { x: scaledX, y: scaledY, width: scaledWidth, height: scaledHeight }
-        });
+          coordinates: { x, y, width, height }
+        });*/
       });
     }
   });
@@ -617,12 +595,11 @@ function highlightSearchResults() {
 function clearSearchHighlights() {
   console.log('Clearing search highlights from all pages');
   
-  // Instead of re-rendering all pages, just clear the highlights
-  // This is more efficient and preserves the page content
+  // Re-render all pages to clear highlights
   pageCanvases.value.forEach((pageCanvas, index) => {
     if (pageCanvas) {
-      // Re-render just this page without highlights
       const pageNum = index + 1;
+      // Re-render the page without highlights
       mupdfService.renderPage(pageNum, pageCanvas, zoom.value);
     }
   });
@@ -679,31 +656,27 @@ function drawSearchHighlightsOnCanvas() {
   searchResults.value.forEach((result, index) => {
     const isActive = index === currentSearchResult.value;
     
-    // Scale coordinates from PDF points to canvas pixels
-    const scaleX = pdfCanvas.value.width / 595; // Standard A4 width in points
-    const scaleY = pdfCanvas.value.height / 842; // Standard A4 height in points
-    
-    const scaledX = result.x * scaleX * zoom.value;
-    const scaledY = result.y * scaleY * zoom.value;
-    const scaledWidth = result.width * scaleX * zoom.value;
-    const scaledHeight = result.height * scaleY * zoom.value;
+    // The coordinates from MuPDF are already in the correct scale
+    // No need for additional scaling since we're rendering at the right size
+    const x = result.x;
+    const y = result.y;
+    const width = result.width;
+    const height = result.height;
     
     // Set highlight color
     ctx.value.fillStyle = isActive ? 'rgba(255, 255, 0, 0.8)' : 'rgba(255, 255, 0, 0.4)';
-    ctx.value.strokeStyle = isActive ? '#ff0000' : '#ffaa00';
-    ctx.value.lineWidth = isActive ? 2 : 1;
+    //ctx.value.strokeStyle = isActive ? '#ff0000' : '#ffaa00';
+    //ctx.value.lineWidth = isActive ? 2 : 1;
     
     // Draw highlight rectangle
-    ctx.value.fillRect(scaledX, scaledY, scaledWidth, scaledHeight);
-    ctx.value.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+    ctx.value.fillRect(x, y, width, height);
+    ctx.value.strokeRect(x, y, width, height);
     
-    console.log('Highlighted search result:', {
+    /*console.log('Highlighted search result:', {
       index,
       isActive,
-      original: { x: result.x, y: result.y, width: result.width, height: result.height },
-      scaled: { x: scaledX, y: scaledY, width: scaledWidth, height: scaledHeight },
-      zoom: zoom.value
-    });
+      coordinates: { x, y, width, height }
+    });*/
   });
 }
 
@@ -1098,7 +1071,7 @@ onUnmounted(() => {
   position: relative;
   transform-origin: top left;
   transition: transform 0.2s ease;
-  border: 2px solid #ff0000; /* Red border for debugging */
+  /*border: 2px solid #ff0000;*/ /* Red border for debugging */
   min-height: 200px;
   display: flex;
   align-items: center;

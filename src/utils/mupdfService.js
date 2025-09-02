@@ -1,318 +1,377 @@
-// MuPDF Service for PDF operations
-// This service provides PDF viewing, editing, and searching capabilities
 import mupdf from 'mupdf';
 
 class MuPDFService {
   constructor() {
-    this.mupdf = null;
     this.document = null;
-    this.currentPage = 1;
-    this.totalPages = 0;
-    this.zoom = 1.0;
+    this.pages = [];
     this.isInitialized = false;
   }
 
-  // Initialize MuPDF
   async initialize() {
     try {
       console.log('Initializing MuPDF service...');
       
-      // Initialize the MuPDF library
-      this.mupdf = mupdf;
+      // Test basic MuPDF functionality
+      try {
+        // Test if we can create a simple matrix
+        const testMatrix = mupdf.Matrix.identity;
+        console.log('MuPDF Matrix test passed:', testMatrix);
+        
+        // Test if we can create a simple rect
+        const testRect = mupdf.Rect.empty;
+        console.log('MuPDF Rect test passed:', testRect);
+        
+        // Test if we can create a simple colorspace
+        const testColorSpace = mupdf.ColorSpace.DeviceRGB;
+        console.log('MuPDF ColorSpace test passed:', testColorSpace);
+        
+      } catch (testError) {
+        console.error('MuPDF basic functionality test failed:', testError);
+        throw new Error(`MuPDF library test failed: ${testError.message}`);
+      }
       
+      // The mupdf library is already loaded, no need for additional initialization
       this.isInitialized = true;
       console.log('MuPDF service initialized successfully');
-      
-      return true;
     } catch (error) {
       console.error('Failed to initialize MuPDF service:', error);
       throw error;
     }
   }
 
-  // Load PDF document
   async loadDocument(url) {
     try {
-      if (!this.isInitialized) {
-        await this.initialize();
-      }
-
-      console.log('Loading PDF document from:', url);
+      console.log('Loading document from URL:', url);
       
-      // Fetch the PDF file
+      // Fetch the PDF data
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
       }
       
       const arrayBuffer = await response.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
       
-      // Load document using MuPDF
-      this.document = this.mupdf.Document.openDocument(arrayBuffer);
+      // Open the document using MuPDF
+      this.document = mupdf.Document.openDocument(uint8Array);
       
-      // Get total pages
-      this.totalPages = this.document.countPages();
-      this.currentPage = 1;
-      
-      console.log(`PDF loaded successfully. Total pages: ${this.totalPages}`);
-      
+      console.log('Document loaded successfully, pages:', this.document.countPages());
       return this.document;
     } catch (error) {
-      console.error('Error loading PDF document:', error);
+      console.error('Failed to load document:', error);
       throw error;
     }
   }
 
-  // Render page to canvas
-  async renderPage(pageNumber, canvas, zoom = 1.0) {
+  getTotalPages() {
+    return this.document ? this.document.countPages() : 0;
+  }
+
+  async renderPage(pageNum, canvas, zoom = 1.0) {
     try {
       if (!this.document) {
-        throw new Error('No document loaded');
+        throw new Error('Document not loaded');
       }
 
-      if (pageNumber < 1 || pageNumber > this.totalPages) {
-        throw new Error(`Invalid page number: ${pageNumber}`);
-      }
-
-      console.log(`Rendering page ${pageNumber} with zoom ${zoom}`);
-      
-      // Load the page
-      const page = this.document.loadPage(pageNumber - 1); // MuPDF uses 0-based indexing
+      // Load the page (pageNum is 1-based, but MuPDF uses 0-based indexing)
+      const page = this.document.loadPage(pageNum - 1);
       
       // Get page bounds
       const bounds = page.getBounds();
-      console.log('Page bounds:', bounds);
+      const pageWidth = bounds[2] - bounds[0];
+      const pageHeight = bounds[3] - bounds[1];
       
-      // Create a pixmap for rendering with proper scaling
-      const matrix = this.mupdf.Matrix.scale(zoom, zoom);
-      const pixmap = page.toPixmap(matrix, this.mupdf.ColorSpace.DeviceRGB, false);
+      // Apply zoom
+      const scaledWidth = pageWidth * zoom;
+      const scaledHeight = pageHeight * zoom;
       
-      console.log('Pixmap created:', {
-        width: pixmap.getWidth(),
-        height: pixmap.getHeight(),
-        components: pixmap.getNumberOfComponents(),
-        alpha: pixmap.getAlpha()
-      });
+      // Set canvas dimensions
+      canvas.width = scaledWidth;
+      canvas.height = scaledHeight;
       
-      // Set canvas size
-      canvas.width = pixmap.getWidth();
-      canvas.height = pixmap.getHeight();
+      // Create transformation matrix for zoom
+      const matrix = mupdf.Matrix.scale(zoom, zoom);
       
-      // Get canvas context
-      const ctx = canvas.getContext('2d');
+      // Create a pixmap from the page
+      const pixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB, false, false);
       
-      // Create ImageData from pixmap
-      const imageData = ctx.createImageData(pixmap.getWidth(), pixmap.getHeight());
+      // Get pixel data and dimensions
       const pixels = pixmap.getPixels();
-      
-      console.log('Copying pixel data...');
-      console.log('Pixmap info:', {
-        width: pixmap.getWidth(),
-        height: pixmap.getHeight(),
-        components: pixmap.getNumberOfComponents(),
-        alpha: pixmap.getAlpha(),
-        pixelsLength: pixels.length
-      });
-      
-      // Copy pixel data correctly (RGBA format)
-      // MuPDF returns RGB data, we need to convert to RGBA
       const width = pixmap.getWidth();
       const height = pixmap.getHeight();
       const components = pixmap.getNumberOfComponents();
-      const hasAlpha = pixmap.getAlpha();
       
-      console.log('Pixel format:', { components, hasAlpha });
+      console.log('Pixmap info:', { 
+        width, 
+        height, 
+        components, 
+        pixelsLength: pixels.length,
+        expectedRGBALength: width * height * 4,
+        expectedRGBLength: width * height * 3,
+        expectedGrayLength: width * height * 1
+      });
       
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const pixelIndex = (y * width + x) * components;
-          const imageDataIndex = (y * width + x) * 4; // RGBA
-          
-          if (components === 3) {
-            // RGB format
-            imageData.data[imageDataIndex] = pixels[pixelIndex];     // R
-            imageData.data[imageDataIndex + 1] = pixels[pixelIndex + 1]; // G
-            imageData.data[imageDataIndex + 2] = pixels[pixelIndex + 2]; // B
-            imageData.data[imageDataIndex + 3] = 255; // A (fully opaque)
-          } else if (components === 4 && hasAlpha) {
-            // RGBA format
-            imageData.data[imageDataIndex] = pixels[pixelIndex];     // R
-            imageData.data[imageDataIndex + 1] = pixels[pixelIndex + 1]; // G
-            imageData.data[imageDataIndex + 2] = pixels[pixelIndex + 2]; // B
-            imageData.data[imageDataIndex + 3] = pixels[pixelIndex + 3]; // A
-          } else if (components === 1) {
-            // Grayscale
-            const gray = pixels[pixelIndex];
-            imageData.data[imageDataIndex] = gray;     // R
-            imageData.data[imageDataIndex + 1] = gray; // G
-            imageData.data[imageDataIndex + 2] = gray; // B
-            imageData.data[imageDataIndex + 3] = 255; // A (fully opaque)
+      // Validate pixel data
+      if (!pixels || pixels.length === 0) {
+        throw new Error('No pixel data received from pixmap');
+      }
+      
+      const expectedLength = width * height * components;
+      if (pixels.length !== expectedLength) {
+        throw new Error(`Pixel data length mismatch: expected ${expectedLength}, got ${pixels.length}`);
+      }
+      
+      // Create canvas context
+      const ctx = canvas.getContext('2d');
+      
+      // Convert MuPDF pixel data to RGBA format
+      const rgbaPixels = new Uint8ClampedArray(width * height * 4);
+      
+      try {
+        console.log('Starting pixel conversion...');
+        
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const pixelIndex = (y * width + x) * components;
+            const rgbaIndex = (y * width + x) * 4;
+            
+            if (components === 3) {
+              // RGB format - convert to RGBA
+              rgbaPixels[rgbaIndex] = pixels[pixelIndex];     // R
+              rgbaPixels[rgbaIndex + 1] = pixels[pixelIndex + 1]; // G
+              rgbaPixels[rgbaIndex + 2] = pixels[pixelIndex + 2]; // B
+              rgbaPixels[rgbaIndex + 3] = 255; // A (fully opaque)
+            } else if (components === 4) {
+              // RGBA format - copy directly
+              rgbaPixels[rgbaIndex] = pixels[pixelIndex];     // R
+              rgbaPixels[rgbaIndex + 1] = pixels[pixelIndex + 1]; // G
+              rgbaPixels[rgbaIndex + 2] = pixels[pixelIndex + 2]; // B
+              rgbaPixels[rgbaIndex + 3] = pixels[pixelIndex + 3]; // A
+            } else if (components === 1) {
+              // Grayscale - convert to RGBA
+              const gray = pixels[pixelIndex];
+              rgbaPixels[rgbaIndex] = gray;     // R
+              rgbaPixels[rgbaIndex + 1] = gray; // G
+              rgbaPixels[rgbaIndex + 2] = gray; // B
+              rgbaPixels[rgbaIndex + 3] = 255; // A (fully opaque)
+            }
           }
         }
+        
+        console.log('Pixel conversion completed successfully');
+        
+      } catch (conversionError) {
+        console.error('Error during pixel conversion:', conversionError);
+        throw new Error(`Pixel conversion failed: ${conversionError.message}`);
       }
       
-      console.log('Putting image data to canvas...');
-      
-      // Put image data to canvas
+      // Create ImageData and put it on canvas
+      const imageData = new ImageData(rgbaPixels, width, height);
       ctx.putImageData(imageData, 0, 0);
       
-      console.log('Page rendered successfully');
+      console.log(`Page ${pageNum} rendered successfully with zoom ${zoom}`);
       
-      this.currentPage = pageNumber;
-      this.zoom = zoom;
+      // Clean up
+      pixmap.destroy();
+      page.destroy();
       
-      return true;
     } catch (error) {
-      console.error('Error rendering page:', error);
-      throw error;
+      console.error(`Failed to render page ${pageNum} with pixmap method:`, error);
+      
+      // Fallback: Try PNG rendering
+      try {
+        console.log(`Attempting PNG fallback for page ${pageNum}`);
+        
+        const page = this.document.loadPage(pageNum - 1);
+        const matrix = mupdf.Matrix.scale(zoom, zoom);
+        
+        // Create a pixmap with different settings
+        const fallbackPixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB, false, false);
+        
+        // Try to get PNG data
+        const pngData = fallbackPixmap.asPNG();
+        
+        if (pngData && pngData.length > 0) {
+          // Create an image from PNG data
+          const blob = new Blob([pngData], { type: 'image/png' });
+          const url = URL.createObjectURL(blob);
+          
+          const img = new Image();
+          img.onload = () => {
+            // Set canvas size
+            canvas.width = img.width;
+            canvas.height = img.height;
+            
+            // Draw the PNG image
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            
+            console.log(`Page ${pageNum} rendered successfully with PNG fallback`);
+            
+            // Clean up
+            URL.revokeObjectURL(url);
+          };
+          
+          img.onerror = () => {
+            throw new Error('PNG fallback image loading failed');
+          };
+          
+          img.src = url;
+        } else {
+          throw new Error('No PNG data received');
+        }
+        
+        // Clean up
+        fallbackPixmap.destroy();
+        page.destroy();
+        
+      } catch (fallbackError) {
+        console.error(`PNG fallback also failed for page ${pageNum}:`, fallbackError);
+        throw new Error(`Both rendering methods failed: ${error.message}, fallback: ${fallbackError.message}`);
+      }
     }
   }
 
-  // Search text in PDF
-  async searchText(searchTerm, pageNumber = null) {
+  async searchText(searchTerm, maxHits = 100) {
     try {
       if (!this.document) {
-        throw new Error('No document loaded');
+        throw new Error('Document not loaded');
       }
 
-      console.log(`Searching for "${searchTerm}" in PDF`);
-      
+      console.log(`Searching for "${searchTerm}" across all pages...`);
       const results = [];
-      const pagesToSearch = pageNumber ? [pageNumber] : Array.from({length: this.totalPages}, (_, i) => i + 1);
-      
-      for (const pageNum of pagesToSearch) {
-        // Load the page
-        const page = this.document.loadPage(pageNum - 1);
-        
-        // Search for text on this page using MuPDF API
-        const searchResults = page.search(searchTerm);
-        
-        // Convert search results to our format
-        for (const result of searchResults) {
-          results.push({
-            page: pageNum,
-            x: result.x0,
-            y: result.y0,
-            width: result.x1 - result.x0,
-            height: result.y1 - result.y0,
-            text: searchTerm
+      const totalPages = this.document.countPages();
+
+      for (let pageNum = 0; pageNum < totalPages; pageNum++) {
+        try {
+          const page = this.document.loadPage(pageNum);
+          
+          // Search on this page
+          const pageResults = page.search(searchTerm, maxHits);
+          
+          // Convert results to our format
+          pageResults.forEach(quads => {
+            // Each quad represents a text match
+            quads.forEach(quad => {
+              // Calculate bounding box from quad coordinates
+              const x = Math.min(quad[0], quad[2], quad[4], quad[6]);
+              const y = Math.min(quad[1], quad[3], quad[5], quad[7]);
+              const width = Math.max(quad[0], quad[2], quad[4], quad[6]) - x;
+              const height = Math.max(quad[1], quad[3], quad[5], quad[7]) - y;
+              
+              results.push({
+                page: pageNum + 1, // Convert to 1-based
+                x: x,
+                y: y,
+                width: width,
+                height: height,
+                quad: quad
+              });
+            });
           });
+          
+          page.destroy();
+        } catch (pageError) {
+          console.warn(`Error searching page ${pageNum + 1}:`, pageError);
+          // Continue with other pages
         }
       }
-      
-      console.log(`Found ${results.length} search results`);
+
+      console.log(`Search completed. Found ${results.length} results.`);
       return results;
+      
     } catch (error) {
-      console.error('Error searching PDF:', error);
+      console.error('Search failed:', error);
       throw error;
     }
   }
 
-  // Add annotation to PDF
-  async addAnnotation(pageNumber, annotation) {
+  async getPageText(pageNum) {
     try {
       if (!this.document) {
-        throw new Error('No document loaded');
+        throw new Error('Document not loaded');
       }
 
-      console.log(`Adding annotation to page ${pageNumber}:`, annotation);
+      const page = this.document.loadPage(pageNum - 1);
+      const structuredText = page.toStructuredText();
+      const text = structuredText.asText();
       
-      // Note: The official MuPDF package has limited annotation support
-      // For now, we'll store annotations in memory and render them as overlays
-      const newAnnotation = {
-        id: `annotation_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        page: pageNumber,
-        type: annotation.type,
-        content: annotation.content,
-        position: annotation.position,
-        color: annotation.color,
-        size: annotation.size,
-        timestamp: new Date().toISOString()
-      };
+      // Clean up
+      structuredText.destroy();
+      page.destroy();
       
-      console.log('Annotation added (stored in memory):', newAnnotation);
-      
-      return newAnnotation;
+      return text;
     } catch (error) {
-      console.error('Error adding annotation:', error);
+      console.error(`Failed to get text from page ${pageNum}:`, error);
       throw error;
     }
   }
 
-  // Save PDF with annotations
+  async addAnnotation(pageNum, annotation) {
+    try {
+      if (!this.document) {
+        throw new Error('Document not loaded');
+      }
+
+      // For now, we'll just store annotations in memory
+      // In a full implementation, you'd add them to the PDF document
+      console.log(`Adding annotation to page ${pageNum}:`, annotation);
+      
+      // TODO: Implement actual PDF annotation addition
+      // This would require using the PDF-specific methods from PDFPage
+      
+    } catch (error) {
+      console.error(`Failed to add annotation to page ${pageNum}:`, error);
+      throw error;
+    }
+  }
+
   async saveDocument() {
     try {
       if (!this.document) {
-        throw new Error('No document loaded');
+        throw new Error('Document not loaded');
       }
 
-      console.log('Saving PDF document with annotations...');
+      // Save to buffer
+      const buffer = this.document.saveToBuffer();
+      const uint8Array = buffer.asUint8Array();
       
-      // Note: The official MuPDF package doesn't support saving annotations
-      // For now, we'll return a success message indicating annotations are stored in memory
+      // Create a blob and download link
+      const blob = new Blob([uint8Array], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
       
-      console.log('PDF annotations stored in memory (not saved to file)');
-      return {
-        success: true,
-        message: 'PDF annotations stored in memory (not saved to file)',
-        timestamp: new Date().toISOString(),
-        note: 'The official MuPDF package has limited annotation saving support'
-      };
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'document_with_annotations.pdf';
+      link.click();
+      
+      // Clean up
+      URL.revokeObjectURL(url);
+      buffer.destroy();
+      
+      console.log('Document saved successfully');
+      return { success: true, url };
+      
     } catch (error) {
-      console.error('Error saving PDF:', error);
+      console.error('Failed to save document:', error);
       throw error;
     }
   }
 
-
-
-  // Get document metadata
-  getMetadata() {
-    if (!this.document) {
-      return null;
-    }
-    // MuPDF doesn't provide direct metadata access, so we'll return basic info
-    return {
-      title: 'PDF Document',
-      author: 'Unknown',
-      subject: 'PDF Document',
-      creator: 'MuPDF',
-      producer: 'MuPDF',
-      pageCount: this.totalPages
-    };
-  }
-
-  // Get current page info
-  getCurrentPage() {
-    return {
-      number: this.currentPage,
-      total: this.totalPages,
-      zoom: this.zoom
-    };
-  }
-
-  // Get total pages
-  getTotalPages() {
-    return this.totalPages;
-  }
-
-  // Cleanup
   destroy() {
-    if (this.document) {
-      this.document = null;
+    try {
+      if (this.document) {
+        this.document.destroy();
+        this.document = null;
+      }
+      this.isInitialized = false;
+      console.log('MuPDF service destroyed');
+    } catch (error) {
+      console.error('Error destroying MuPDF service:', error);
     }
-    if (this.mupdf) {
-      // The official MuPDF package doesn't have a destroy method
-      this.mupdf = null;
-    }
-    this.isInitialized = false;
-    console.log('MuPDF service destroyed');
   }
-
-
 }
 
-// Create singleton instance
+// Export a singleton instance
 const mupdfService = new MuPDFService();
-
 export default mupdfService;

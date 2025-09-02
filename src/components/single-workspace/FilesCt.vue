@@ -262,8 +262,13 @@ watch(currentWorkspace, async (newWorkspace, oldWorkspace) => {
 
 // Watch route changes for URL navigation and browser back/forward
 watch(() => route.query, async (newQuery, oldQuery) => {
+  console.log('Route watcher triggered:', { newQuery, oldQuery, isInitializing: isInitializing.value, isNavigating: isInitializing.value });
+  
   // Prevent multiple initializations
-  if (isInitializing.value || isNavigating.value) return;
+  if (isInitializing.value || isNavigating.value) {
+    console.log('Route watcher blocked - isInitializing or isNavigating');
+    return;
+  }
   
   const queryChanged = JSON.stringify(newQuery) !== JSON.stringify(oldQuery);
   if (queryChanged && currentWorkspace.value) {
@@ -334,17 +339,24 @@ watch(() => route.query, async (newQuery, oldQuery) => {
     // Handle file selection changes without folder changes
     if (newFileParam !== oldQuery.file && newFolderParam === oldFolderParam) {
       console.log('Browser navigation detected - file selection change');
+      console.log('isNavigating:', isNavigating.value, 'newFileParam:', newFileParam, 'oldQuery.file:', oldQuery.file);
       
       // Only handle file deselection if we're not currently navigating
       if (!newFileParam && !isNavigating.value) {
         console.log('Clearing file selection due to URL change');
+        console.log('Current selectedFile before clearing:', selectedFile.value?.name);
         selectedFile.value = null;
       } else if (newFileParam) {
         const fileName = decodeURIComponent(newFileParam);
+        // Try to find file in current files array, but don't fail if not found yet
         const file = files.value.find(f => f.name === fileName);
         if (file) {
           selectedFile.value = file;
           console.log('Browser restored file selection:', fileName);
+        } else {
+          console.log('File not found in current files array, will be restored after contents load:', fileName);
+          // Set a flag to restore file selection after contents load
+          selectedFile.value = { name: fileName, pending: true };
         }
       }
       return; // Exit early
@@ -367,7 +379,12 @@ watch(folderBreadcrumbs, () => {
   updatePageTitle();
 }, { deep: true });
 
-watch(selectedFile, () => {
+watch(selectedFile, (newFile, oldFile) => {
+  console.log('selectedFile watcher triggered:', { 
+    newFile: newFile?.name, 
+    oldFile: oldFile?.name,
+    isNavigating: isNavigating.value 
+  });
   updatePageTitle();
 });
 
@@ -494,7 +511,7 @@ async function navigateToFolderByPath(folderPath, updateUrl = true) {
   // Only update URL if explicitly requested (not during initialization)
   if (updateUrl) {
     await nextTick();
-    updateUrlForNavigation();
+    await updateUrlForNavigation();
   }
 }
 
@@ -646,6 +663,20 @@ async function loadContents() {
       if (cachedData) {
         files.value = cachedData.files || [];
         folders.value = cachedData.folders || [];
+        
+        // Restore pending file selection if any
+        if (selectedFile.value && selectedFile.value.pending) {
+          const pendingFileName = selectedFile.value.name;
+          const actualFile = files.value.find(f => f.name === pendingFileName);
+          if (actualFile) {
+            console.log('Restoring pending file selection from cache:', pendingFileName);
+            selectedFile.value = actualFile;
+          } else {
+            console.log('Pending file not found in cached contents, clearing selection:', pendingFileName);
+            selectedFile.value = null;
+          }
+        }
+        
         updateLastFetchTime();
         return;
       }
@@ -823,6 +854,19 @@ async function loadContentsDirectly(path, abortController) {
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           }));
+          
+          // Restore pending file selection if any
+          if (selectedFile.value && selectedFile.value.pending) {
+            const pendingFileName = selectedFile.value.name;
+            const actualFile = files.value.find(f => f.name === pendingFileName);
+            if (actualFile) {
+              console.log('Restoring pending file selection:', pendingFileName);
+              selectedFile.value = actualFile;
+            } else {
+              console.log('Pending file not found in loaded contents, clearing selection:', pendingFileName);
+              selectedFile.value = null;
+            }
+          }
         }
       }
       return true;
@@ -859,6 +903,19 @@ async function loadContentsDirectly(path, abortController) {
         updated_at: new Date().toISOString()
       };
     });
+    
+    // Restore pending file selection if any
+    if (selectedFile.value && selectedFile.value.pending) {
+      const pendingFileName = selectedFile.value.name;
+      const actualFile = files.value.find(f => f.name === pendingFileName);
+      if (actualFile) {
+        console.log('Restoring pending file selection:', pendingFileName);
+        selectedFile.value = actualFile;
+      } else {
+        console.log('Pending file not found in loaded contents, clearing selection:', pendingFileName);
+        selectedFile.value = null;
+      }
+    }
     
     // Map folders
     folders.value = folderItems.map(item => ({
@@ -1177,7 +1234,7 @@ async function navigateToFolder(folder, fromUserAction = true) {
       if (fromUserAction) {
         await nextTick();
         if (isNavigating.value) {
-          updateUrlForNavigation();
+          await updateUrlForNavigation();
         }
       }
       return;
@@ -1212,7 +1269,7 @@ async function navigateToFolder(folder, fromUserAction = true) {
       
       // Double-check that we're still navigating to prevent race conditions
       if (isNavigating.value) {
-        updateUrlForNavigation();
+        await updateUrlForNavigation();
       }
     }
     
@@ -1230,7 +1287,7 @@ async function navigateToFolder(folder, fromUserAction = true) {
 }
 
 // Handle file selection
-function handleFileSelect(file) {
+async function handleFileSelect(file) {
   try {
     console.log('handleFileSelect called with:', file.name);
     
@@ -1248,8 +1305,11 @@ function handleFileSelect(file) {
     console.log('File selected:', selectedFile.value?.name || 'none');
     console.log('isInSplitView:', isInSplitView.value);
     console.log('totalPanes:', totalPanes.value);
+    console.log('About to update URL for file selection...');
     
-    updateUrlForNavigation();
+    await updateUrlForNavigation();
+    
+    console.log('URL update completed for file selection');
     
     if (selectedFile.value) {
       updateWorkspaceActivity(currentWorkspace.value.id, 'file_view');
@@ -1261,10 +1321,11 @@ function handleFileSelect(file) {
       console.log('isInSplitView after update:', isInSplitView.value);
     });
     
-    // Reset navigation flag after a longer delay to prevent double-clicks
+    // Reset navigation flag after a longer delay to prevent double-clicks and allow URL update to complete
     setTimeout(() => {
+      console.log('Resetting navigation flag after file selection');
       isNavigating.value = false;
-    }, 500); // Increased from 200ms to 500ms
+    }, 1000); // Increased to 1000ms to ensure URL update completes
   } catch (error) {
     console.error('Error selecting file:', error);
     isNavigating.value = false;
@@ -1272,7 +1333,7 @@ function handleFileSelect(file) {
 }
 
 // Handle file deselection
-function handleFileDeselect() {
+async function handleFileDeselect() {
   try {
     console.log('handleFileDeselect called');
     
@@ -1282,7 +1343,7 @@ function handleFileDeselect() {
     selectedFile.value = null;
     console.log('File deselected');
     
-    updateUrlForNavigation();
+    await updateUrlForNavigation();
     
     // Reset navigation flag after a delay
     setTimeout(() => {
@@ -1332,11 +1393,12 @@ function updateUrl() {
 }
 
 // Update URL for navigation (bypasses isNavigating check for user actions)
-function updateUrlForNavigation() {
+async function updateUrlForNavigation() {
   try {
     console.log('updateUrlForNavigation called');
     console.log('Current folder:', currentFolder.value);
     console.log('Current route query:', route.query);
+    console.log('selectedFile:', selectedFile.value?.name);
     
     const query = {};
     
@@ -1357,28 +1419,45 @@ function updateUrlForNavigation() {
     const currentQuery = route.query;
     const newFolderParam = query.folder;
     const currentFolderParam = currentQuery.folder;
+    const newFileParam = query.file;
+    const currentFileParam = currentQuery.file;
     
-    if (newFolderParam === currentFolderParam) {
+    console.log('File selection details:', {
+      selectedFile: selectedFile.value?.name,
+      newFileParam,
+      currentFileParam,
+      needsUpdate: newFileParam !== currentFileParam
+    });
+    
+    // Check if either folder or file parameters need updating
+    if (newFolderParam === currentFolderParam && newFileParam === currentFileParam) {
       console.log('URL is already up to date, no need to update');
       return;
     }
     
     // Use router.replace to avoid creating multiple history entries for the same navigation
-    router.replace({
-      name: route.name,
-      params: route.params,
-      query: Object.keys(query).length > 0 ? query : undefined
-    }).then(() => {
+    console.log('Calling router.replace with query:', query);
+    
+    try {
+      await router.replace({
+        name: route.name,
+        params: route.params,
+        query: Object.keys(query).length > 0 ? query : undefined
+      });
+      
       console.log('URL update completed successfully');
       console.log('New URL after update:', window.location.href);
-    }).catch((error) => {
+      console.log('Route query after update:', route.query);
+      
+    } catch (error) {
       // Handle duplicate navigation gracefully
       if (error.name === 'NavigationDuplicated' || error.message.includes('Avoided redundant navigation')) {
         console.log('Navigation was duplicate, ignoring error');
       } else {
         console.error('Router replace failed:', error);
+        throw error; // Re-throw to be caught by outer try-catch
       }
-    });
+    }
     
   } catch (error) {
     console.error('Error updating URL for navigation:', error);
@@ -1506,7 +1585,7 @@ async function navigateToRoot() {
     
     // Then update URL
     await nextTick();
-    updateUrlForNavigation();
+    await updateUrlForNavigation();
     
   } catch (error) {
     console.error('Error navigating to root:', error);
@@ -1552,7 +1631,7 @@ async function navigateToBreadcrumb(breadcrumbIndex) {
     
     // Then update URL
     await nextTick();
-    updateUrlForNavigation();
+    await updateUrlForNavigation();
     
   } catch (error) {
     console.error('Error navigating to breadcrumb:', error);

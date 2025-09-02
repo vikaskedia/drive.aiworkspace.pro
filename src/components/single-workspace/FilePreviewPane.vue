@@ -47,12 +47,35 @@
       <!-- Image Viewer -->
       <div v-else-if="isImage" class="image-container">
         <img 
-          :src="getAuthenticatedDownloadUrl(file.download_url)" 
+          v-if="imageObjectUrl"
+          :src="imageObjectUrl" 
           :alt="file.name"
           class="image-preview"
           @load="handleImageLoad"
           @error="handleImageError"
         />
+        <div v-else-if="imageLoading" class="image-loading">
+          <el-icon class="is-loading"><Picture /></el-icon>
+          <p>Loading image...</p>
+          <p class="loading-hint">Converting to avoid CORS issues...</p>
+        </div>
+        <div v-else-if="imageError" class="image-error">
+          <el-icon class="image-error-icon"><Warning /></el-icon>
+          <h4>Failed to load image</h4>
+          <p>{{ imageError }}</p>
+          <div class="error-details">
+            <p><strong>Common causes:</strong></p>
+            <ul>
+              <li>Cross-origin resource sharing (CORS) restrictions</li>
+              <li>Server authentication issues</li>
+              <li>Network connectivity problems</li>
+            </ul>
+          </div>
+          <div class="error-actions">
+            <el-button @click="retryImageLoad" size="small">Retry</el-button>
+            <el-button @click="downloadFile" size="small" type="primary">Download Instead</el-button>
+          </div>
+        </div>
       </div>
       
       <!-- Text Files -->
@@ -105,7 +128,7 @@
 
 <script setup>
 import { ref, onMounted, watch, nextTick, computed, onUnmounted } from 'vue';
-import { Close, Edit, Document, Warning, Download, RefreshLeft } from '@element-plus/icons-vue';
+import { Close, Edit, Document, Warning, Download, RefreshLeft, Picture } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import MuPdfViewer from '../common/MuPdfViewer.vue';
 import MarkDownEditor from '../common/MarkDownEditor.vue';
@@ -137,6 +160,11 @@ const univerDocumentComponent = ref(null);
 const previewContentRef = ref(null);
 const pdfLoadTimeout = ref(null);
 const pdfInstance = ref(null);
+
+// Image handling state
+const imageObjectUrl = ref(null);
+const imageLoading = ref(false);
+const imageError = ref(null);
 
 // File type checks
 const isPdf = computed(() => props.file?.name?.toLowerCase().endsWith('.pdf'));
@@ -306,7 +334,59 @@ async function downloadFile() {
   }
 }
 
-// Handle image load/error
+// Load image as blob to avoid CORS issues
+async function loadImageAsBlob() {
+  if (!props.file?.download_url) return;
+  
+  imageLoading.value = true;
+  imageError.value = null;
+  imageObjectUrl.value = null;
+  
+  try {
+    console.log('Loading image as blob to avoid CORS issues:', props.file.name);
+    
+    const response = await fetch(getAuthenticatedDownloadUrl(props.file.download_url));
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+    }
+    
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    
+    imageObjectUrl.value = objectUrl;
+    imageLoading.value = false;
+    
+    console.log('Image loaded successfully as blob:', props.file.name);
+    
+    // Scroll to top after image loads
+    setTimeout(() => {
+      scrollToTop();
+    }, 100);
+    
+  } catch (error) {
+    console.error('Error loading image as blob:', error);
+    
+    // Try fallback: load image directly (might work in some cases)
+    console.log('Trying fallback: loading image directly from URL');
+    try {
+      imageObjectUrl.value = getAuthenticatedDownloadUrl(props.file.download_url);
+      imageLoading.value = false;
+      console.log('Fallback image loading successful');
+    } catch (fallbackError) {
+      console.error('Fallback image loading also failed:', fallbackError);
+      imageError.value = `Failed to load image: ${error.message}. This might be due to CORS restrictions.`;
+      imageLoading.value = false;
+    }
+  }
+}
+
+// Retry loading image
+function retryImageLoad() {
+  loadImageAsBlob();
+}
+
+// Handle image load/error (legacy - kept for compatibility)
 function handleImageLoad() {
   loading.value = false;
   error.value = null;
@@ -535,6 +615,16 @@ async function handleUniverDocumentSave(documentData) {
 // Initialize when file changes
 watch(() => props.file, async (newFile) => {
   if (newFile) {
+    // Cleanup previous image object URL if exists
+    if (imageObjectUrl.value) {
+      URL.revokeObjectURL(imageObjectUrl.value);
+      imageObjectUrl.value = null;
+    }
+    
+    // Reset image state
+    imageLoading.value = false;
+    imageError.value = null;
+    
     loading.value = true;
     error.value = null;
     hasUnsavedChanges.value = false;
@@ -558,9 +648,13 @@ watch(() => props.file, async (newFile) => {
       await loadTextContent();
     } else if (isUniverDoc.value) {
       await loadUniverDocument();
-    } else if (isPdf.value || isImage.value) {
-      // For PDFs and images, the loading is handled by the component itself
+    } else if (isPdf.value) {
+      // For PDFs, the loading is handled by the component itself
       loading.value = false;
+    } else if (isImage.value) {
+      // For images, load as blob to avoid CORS issues
+      loading.value = false;
+      await loadImageAsBlob();
     } else {
       loading.value = false;
     }
@@ -577,6 +671,12 @@ onUnmounted(() => {
   // Cleanup any remaining timeouts
   if (pdfLoadTimeout.value) {
     clearTimeout(pdfLoadTimeout.value);
+  }
+  
+  // Cleanup image object URL
+  if (imageObjectUrl.value) {
+    URL.revokeObjectURL(imageObjectUrl.value);
+    imageObjectUrl.value = null;
   }
 });
 </script>
@@ -694,6 +794,80 @@ onUnmounted(() => {
   object-fit: contain;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   border-radius: 4px;
+}
+
+.image-loading,
+.image-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+  color: #909399;
+  min-height: 200px;
+}
+
+.image-loading .el-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  color: #409EFF;
+}
+
+.image-loading p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.image-loading .loading-hint {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+
+.image-error .image-error-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  color: #f56c6c;
+}
+
+.image-error h4 {
+  margin: 16px 0 8px 0;
+  color: #606266;
+}
+
+.image-error p {
+  margin: 8px 0 16px 0;
+  color: #909399;
+}
+
+.image-error .el-button {
+  margin: 0 4px;
+}
+
+.image-error .error-details {
+  margin: 16px 0;
+  text-align: left;
+  max-width: 400px;
+}
+
+.image-error .error-details p {
+  margin: 8px 0;
+  font-weight: 500;
+}
+
+.image-error .error-details ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.image-error .error-details li {
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.image-error .error-actions {
+  margin-top: 16px;
 }
 
 .text-preview {

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { supabase } from '../supabase'
+import { supabase } from '@aiworkspace/shared-header'
 import { 
   getCachedWorkspaces, 
   setCachedWorkspaces, 

@@ -1,6 +1,6 @@
 <template>
   <div id="app">
-    <AppHeader />
+    <AIWorkspaceHeader />
     <main class="main-content">
       <router-view/>
     </main>
@@ -8,17 +8,19 @@
 </template>
 
 <script>
-import AppHeader from './components/AppHeader.vue'
+import { AIWorkspaceHeader } from '@aiworkspace/shared-header'
 
 export default {
   name: 'App',
   components: {
-    AppHeader
+    AIWorkspaceHeader
   }
 }
 </script>
 
 <style>
+@import '@aiworkspace/shared-header/style.css';
+
 * {
   box-sizing: border-box;
 }

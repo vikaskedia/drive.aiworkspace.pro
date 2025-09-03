@@ -9,13 +9,38 @@
           <h3>Quick Access</h3>
           <div class="action-buttons">
             <el-button 
+              v-if="workspaces.length > 0"
               type="primary" 
               size="large"
-              @click="navigateToWorkspace('demo')"
+              @click="navigateToFirstWorkspace"
             >
               <el-icon><Folder /></el-icon>
               Open File System
             </el-button>
+            <el-button 
+              v-else
+              type="primary" 
+              size="large"
+              @click="loadWorkspaces"
+            >
+              <el-icon><Folder /></el-icon>
+              Load Workspaces
+            </el-button>
+          </div>
+          
+          <!-- Show available workspaces -->
+          <div v-if="workspaces.length > 0" class="workspace-list">
+            <h4>Available Workspaces:</h4>
+            <div class="workspace-item" v-for="workspace in workspaces" :key="workspace.id">
+              <span>{{ workspace.title }}</span>
+              <el-button 
+                size="small" 
+                type="text"
+                @click="navigateToWorkspace(workspace.id)"
+              >
+                Open
+              </el-button>
+            </div>
           </div>
         </el-card>
         
@@ -36,14 +61,40 @@
 </template>
 
 <script setup>
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useWorkspaceStore } from '../store/workspace'
 import { Folder } from '@element-plus/icons-vue'
 
 const router = useRouter()
+const workspaceStore = useWorkspaceStore()
+const workspaces = ref([])
+
+const loadWorkspaces = async () => {
+  try {
+    const loadedWorkspaces = await workspaceStore.loadWorkspaces()
+    workspaces.value = loadedWorkspaces || []
+    console.log('Loaded workspaces:', workspaces.value)
+  } catch (error) {
+    console.error('Error loading workspaces:', error)
+  }
+}
+
+const navigateToFirstWorkspace = () => {
+  if (workspaces.value.length > 0) {
+    navigateToWorkspace(workspaces.value[0].id)
+  }
+}
 
 const navigateToWorkspace = (workspaceId) => {
-  router.push(`/all-workspace/files`)
+  // Navigate to a specific workspace instead of the all-workspace route
+  router.push(`/single-workspace/${workspaceId}/files`)
 }
+
+onMounted(async () => {
+  // Load workspaces on mount
+  await loadWorkspaces()
+})
 </script>
 
 <style scoped>
@@ -106,6 +157,33 @@ const navigateToWorkspace = (workspaceId) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.workspace-list {
+  margin-top: 1rem;
+  text-align: left;
+}
+
+.workspace-list h4 {
+  margin: 0 0 0.5rem 0;
+  color: #2c3e50;
+  font-size: 1rem;
+}
+
+.workspace-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem;
+  margin: 0.25rem 0;
+  background: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #e9ecef;
+}
+
+.workspace-item span {
+  font-weight: 500;
+  color: #495057;
 }
 
 .info-card ul {

@@ -22,18 +22,129 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWorkspaceStore } from '../store/workspace'
 import FilesCt from '../components/single-workspace/FilesCt.vue'
-import { supabase } from '../supabase'
+import { supabase } from '@aiworkspace/shared-header'
 
 const route = useRoute()
 const workspaceStore = useWorkspaceStore()
 const isAuthenticated = ref(null) // null = checking, true = auth, false = not auth
 const loginUrl = 'https://login.aiworkspace.pro'
 
+// Function to fetch workspace by ID
+const fetchWorkspaceById = async (workspaceId) => {
+  try {
+    console.log('Fetching workspace by ID:', workspaceId)
+    
+    // Validate workspace ID
+    if (!workspaceId || isNaN(parseInt(workspaceId))) {
+      console.error('Invalid workspace ID:', workspaceId)
+      return
+    }
+    
+    const workspaceIdNum = parseInt(workspaceId)
+    console.log('Parsed workspace ID:', workspaceIdNum)
+    
+    // First try to get from existing workspaces in store
+    const existingWorkspace = workspaceStore.workspaces.find(w => w.id === workspaceIdNum)
+    if (existingWorkspace && existingWorkspace.git_repo) {
+      console.log('Found workspace in store with git_repo:', existingWorkspace)
+      workspaceStore.setCurrentWorkspace(existingWorkspace)
+      return
+    }
+    
+    // If not in store or missing git_repo, fetch directly from Supabase
+    console.log('Fetching workspace directly from Supabase...')
+    
+    try {
+      const { data: { user: authUser } } = await supabase.auth.getUser()
+      if (!authUser) {
+        console.error('No authenticated user found')
+        return
+      }
+      
+      console.log('Fetching workspace for user:', authUser.id)
+      
+      // Simple direct query - let RLS handle the access control
+      const { data: workspace, error } = await supabase
+        .from('workspaces')
+        .select('id, title, description, parent_workspace_id, created_by, archived, created_at, git_repo')
+        .eq('id', workspaceIdNum)
+        .single()
+      
+      if (error) {
+        console.error('Error fetching workspace:', error)
+        
+        // If RLS is blocking access, try to understand why
+        if (error.code === 'PGRST116') {
+          console.error('RLS policy blocked access. User may not have access to this workspace.')
+        }
+        return
+      }
+      
+      console.log('Raw workspace data from Supabase:', workspace)
+      
+      if (workspace) {
+        // Check if git_repo exists
+        if (!workspace.git_repo) {
+          console.warn('Workspace found but git_repo is missing:', workspace)
+          // Try to create a default git_repo based on the workspace title
+          const defaultGitRepo = `workspace-${workspace.id}-${workspace.title.toLowerCase().replace(/[^a-z0-9]/g, '-')}`
+          console.log('Using default git_repo:', defaultGitRepo)
+          
+          // Process the workspace data with default git_repo
+          const processedWorkspace = {
+            id: workspace.id,
+            title: workspace.title,
+            description: workspace.description || 'No description',
+            parent_workspace_id: workspace.parent_workspace_id,
+            created_by: workspace.created_by,
+            archived: workspace.archived,
+            created_at: workspace.created_at,
+            git_repo: defaultGitRepo,
+            latest_activity: workspace.created_at,
+            hasAccess: true,
+            accessType: 'edit'
+          }
+          
+          console.log('Processed workspace with default git_repo:', processedWorkspace)
+          workspaceStore.setCurrentWorkspace(processedWorkspace)
+          return
+        }
+        
+        // Process the workspace data
+        const processedWorkspace = {
+          id: workspace.id,
+          title: workspace.title,
+          description: workspace.description || 'No description',
+          parent_workspace_id: workspace.parent_workspace_id,
+          created_by: workspace.created_by,
+          archived: workspace.archived,
+          created_at: workspace.created_at,
+          git_repo: workspace.git_repo,
+          latest_activity: workspace.created_at,
+          hasAccess: true,
+          accessType: 'edit'
+        }
+        
+        console.log('✅ Successfully fetched and processed workspace:', processedWorkspace)
+        console.log('✅ git_repo value:', processedWorkspace.git_repo)
+        workspaceStore.setCurrentWorkspace(processedWorkspace)
+      }
+    } catch (fetchError) {
+      console.error('Error in fetchWorkspaceById:', fetchError)
+    }
+  } catch (error) {
+    console.error('Error in fetchWorkspaceById:', error)
+  }
+}
+
 onMounted(async () => {
+  console.log('Files.vue onMounted - route params:', route.params)
+  console.log('Files.vue onMounted - workspace_id:', route.params.workspace_id)
+  
   // Optimistic auth check - check multiple Supabase storage keys
   const authKeys = [
     'sb-aiworkspace-auth-token',
@@ -67,40 +178,64 @@ onMounted(async () => {
   try {
     const { data: { session } } = await supabase.auth.getSession()
     if (session && session.user) {
+      console.log('✅ User authenticated:', session.user.id)
       isAuthenticated.value = true
-      // Workspace initialization may be handled inside FilesCt or the store
-    } else {
-      // If no active session, try to restore from cookies
-      console.log('[auth][files] No active session, attempting to restore from cookies...')
-      const { restoreSessionWithRetry } = await import('../plugins/crossSubdomainAuth')
-      const restoreResult = await restoreSessionWithRetry()
       
-      if (restoreResult.success && restoreResult.session) {
-        console.log('[auth][files] Session restored successfully')
-        isAuthenticated.value = true
+      // If we have a workspace_id in the route, fetch it immediately
+      if (route.params.workspace_id) {
+        console.log('🚀 Fetching specific workspace immediately:', route.params.workspace_id)
+        await fetchWorkspaceById(route.params.workspace_id)
       } else {
-        console.log('[auth][files] Failed to restore session:', restoreResult.error)
-        isAuthenticated.value = false
+        console.log('No workspace_id in route params')
       }
+      
+      // Load workspaces in background for the store (not blocking)
+      console.log('Loading workspaces in background...')
+      workspaceStore.loadWorkspaces().then(() => {
+        console.log('Workspaces loaded in background:', workspaceStore.workspaces.length)
+      }).catch(error => {
+        console.log('Background workspace loading failed:', error)
+      })
+      
+    } else {
+      console.log('❌ No active session found')
+      isAuthenticated.value = false
     }
   } catch (e) {
     console.error('Error checking Supabase session:', e)
-    // Try to restore session even if getSession fails
-    try {
-      const { restoreSessionWithRetry } = await import('../plugins/crossSubdomainAuth')
-      const restoreResult = await restoreSessionWithRetry()
-      if (restoreResult.success && restoreResult.session) {
-        console.log('[auth][files] Session restored after error')
-        isAuthenticated.value = true
-      } else {
-        isAuthenticated.value = false
-      }
-    } catch (restoreError) {
-      console.error('Error restoring session:', restoreError)
-      isAuthenticated.value = false
+    isAuthenticated.value = false
+  }
+})
+
+// Watch for route changes to handle workspace switching
+watch(() => route.params.workspace_id, async (newWorkspaceId, oldWorkspaceId) => {
+  console.log('🔄 Route watcher triggered:', { newWorkspaceId, oldWorkspaceId, isAuthenticated: isAuthenticated.value })
+  
+  if (newWorkspaceId && newWorkspaceId !== oldWorkspaceId && isAuthenticated.value === true) {
+    console.log('🚀 Workspace ID changed, fetching new workspace:', newWorkspaceId)
+    await fetchWorkspaceById(newWorkspaceId)
+  } else if (newWorkspaceId && isAuthenticated.value === true) {
+    console.log('🔄 Same workspace ID, but ensuring workspace is loaded:', newWorkspaceId)
+    // Check if we already have this workspace loaded
+    const currentWorkspace = workspaceStore.currentWorkspace
+    if (!currentWorkspace || currentWorkspace.id.toString() !== newWorkspaceId) {
+      console.log('🔄 Workspace not loaded, fetching now:', newWorkspaceId)
+      await fetchWorkspaceById(newWorkspaceId)
+    } else {
+      console.log('✅ Workspace already loaded:', currentWorkspace)
     }
   }
 })
+
+// Watch for changes in the currentWorkspace store to debug
+watch(() => workspaceStore.currentWorkspace, (newWorkspace, oldWorkspace) => {
+  console.log('🔄 Store currentWorkspace changed:', { 
+    newWorkspace, 
+    oldWorkspace,
+    newGitRepo: newWorkspace?.git_repo,
+    oldGitRepo: oldWorkspace?.git_repo
+  })
+}, { immediate: true })
 </script>
 
 <style scoped>

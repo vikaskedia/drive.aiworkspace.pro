@@ -56,7 +56,19 @@ const isInitializing = ref(false);
 const cacheStatusRef = ref(null);
 const lastFetchTime = ref(null);
 
+// Computed property to check if workspace is ready
+const isWorkspaceReady = computed(() => {
+  return currentWorkspace.value && currentWorkspace.value.git_repo
+})
 
+// Watch for workspace readiness
+watch(isWorkspaceReady, (ready) => {
+  if (ready) {
+    console.log('Workspace is now ready with git_repo:', currentWorkspace.value.git_repo)
+    // Trigger any initialization that depends on git_repo
+    updateLastFetchTime()
+  }
+})
 
 // Enhanced filters search functionality
 const enhancedSearchMode = ref(false);
@@ -218,27 +230,32 @@ watch(currentWorkspace, async (newWorkspace, oldWorkspace) => {
     return;
   }
   
-      if (newWorkspace) {
-      updatePageTitle();
-      updateLastFetchTime();
-      
-      // Load favorites for this workspace
-      loadFavorites();
-      
-      // Check if we have cached content for this workspace before resetting
-      const repoName = newWorkspace.git_repo;
-      const cachedRootData = getCachedData(repoName, '');
-      
-      if (cachedRootData) {
-        // Load cached content immediately while initializing
-        files.value = cachedRootData.files || [];
-        folders.value = cachedRootData.folders || [];
-      } else {
-        // Reset state only if no cache
-        files.value = [];
-        folders.value = [];
-      }
+  console.log('Workspace changed in FilesCt:', { newWorkspace, oldWorkspace })
+  console.log('New workspace git_repo:', newWorkspace?.git_repo)
+  
+  if (newWorkspace && newWorkspace.git_repo) {
+    console.log('✅ Workspace is ready with git_repo, proceeding with initialization')
     
+    updatePageTitle();
+    updateLastFetchTime();
+    
+    // Load favorites for this workspace
+    loadFavorites();
+    
+    // Check if we have cached content for this workspace before resetting
+    const repoName = newWorkspace.git_repo;
+    const cachedRootData = getCachedData(repoName, '');
+    
+    if (cachedRootData) {
+      // Load cached content immediately while initializing
+      files.value = cachedRootData.files || [];
+      folders.value = cachedRootData.folders || [];
+    } else {
+      // Reset state only if no cache
+      files.value = [];
+      folders.value = [];
+    }
+  
     // Reset navigation state
     currentFolder.value = null;
     folderBreadcrumbs.value = [];
@@ -257,6 +274,8 @@ watch(currentWorkspace, async (newWorkspace, oldWorkspace) => {
     } finally {
       isInitializing.value = false;
     }
+  } else {
+    console.log('❌ Workspace is not ready - missing git_repo, waiting...')
   }
 }, { immediate: true });
 
@@ -517,23 +536,31 @@ async function navigateToFolderByPath(folderPath, updateUrl = true) {
 
 // Lifecycle hooks
 onMounted(async () => {
-  updatePageTitle();
-  updateLastFetchTime();
+  console.log('FilesCt onMounted - currentWorkspace:', currentWorkspace.value)
+  console.log('FilesCt onMounted - git_repo:', currentWorkspace.value?.git_repo)
   
-  // Load favorites for current workspace
-  loadFavorites();
-  
-  // IMMEDIATE CACHE CHECK - Try to show cached content if commit matches
-  if (currentWorkspace.value?.git_repo) {
+  // Check if workspace is already ready
+  if (currentWorkspace.value && currentWorkspace.value.git_repo) {
+    console.log('✅ Workspace already ready, proceeding with initialization')
+    updatePageTitle();
+    updateLastFetchTime();
+    
+    // Load favorites for current workspace
+    loadFavorites();
+    
+    // IMMEDIATE CACHE CHECK - Try to show cached content if commit matches
     const repoName = currentWorkspace.value.git_repo;
     const cachedData = getCachedData(repoName, '');
     const storedCommitSha = getCachedCommitSha(repoName);
     
     if (cachedData && storedCommitSha) {
       // Don't set loading to true yet - let loadContents handle the commit check
+      console.log('Found cached data, will check commit')
     } else {
       loading.value = true; // Show loading for fresh data fetch
     }
+  } else {
+    console.log('⏳ Workspace not ready yet, waiting for workspace to be set...')
   }
   
   // Add browser back/forward navigation listener
@@ -584,8 +611,18 @@ function validateGiteaConfig() {
 // Load files and folders from Gitea (improved commit-based caching)
 async function loadContents() {
   if (!currentWorkspace.value) {
+    console.log('loadContents: No currentWorkspace, waiting...')
     return;
   }
+  
+  if (!currentWorkspace.value.git_repo) {
+    console.log('loadContents: No git_repo in currentWorkspace, waiting...')
+    console.log('Current workspace state:', currentWorkspace.value)
+    return;
+  }
+  
+  console.log('✅ loadContents: Workspace ready, proceeding with git_repo:', currentWorkspace.value.git_repo)
+  
   if (!validateGiteaConfig()) {
     return;
   }

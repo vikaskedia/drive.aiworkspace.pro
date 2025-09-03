@@ -5,7 +5,6 @@ import 'element-plus/dist/index.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
-import { restoreCrossSubdomainSession } from './plugins/crossSubdomainAuth'
 
 import './style.css'
 
@@ -21,11 +20,4 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)
 }
 
-(async () => {
-  try {
-    await restoreCrossSubdomainSession()
-  } catch (e) {
-    console.log('[auth][restore] failed pre-mount', e)
-  }
-  app.mount('#app')
-})()
+app.mount('#app')

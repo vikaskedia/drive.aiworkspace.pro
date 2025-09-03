@@ -21,6 +21,7 @@
   },
   "homepage": "https://github.com/vikaskedia/files.aiworkspace.pro#readme",
   "dependencies": {
+    "@aiworkspace/shared-header": "github:vikaskedia/header.aiworkspace.pro",
     "@element-plus/icons-vue": "^2.3.2",
     "@supabase/supabase-js": "^2.55.0",
     "@univerjs/core": "^0.10.4",

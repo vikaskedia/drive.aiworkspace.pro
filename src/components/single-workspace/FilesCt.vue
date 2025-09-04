@@ -1457,6 +1457,9 @@ async function navigateToFolder(folder, fromUserAction = true) {
       if (fromUserAction) {
         console.log('🔄 User clicked on current folder - forcing content refresh');
         
+        // Show loading state IMMEDIATELY to indicate something is happening
+        loading.value = true;
+        
         // Clear any existing request for this path to ensure fresh load
         if (activeRequests.value.loadContents) {
           activeRequests.value.loadContents.abort();
@@ -1466,9 +1469,6 @@ async function navigateToFolder(folder, fromUserAction = true) {
         // Force a fresh load by temporarily clearing the last requested path
         const originalLastPath = lastRequestedPaths.value.loadContents;
         lastRequestedPaths.value.loadContents = null;
-        
-        // Show loading state to indicate something is happening
-        loading.value = true;
         
         // Load fresh content with force refresh
         await loadContents(true);
@@ -1488,6 +1488,9 @@ async function navigateToFolder(folder, fromUserAction = true) {
       return;
     }
     
+    // Show loading state IMMEDIATELY to prevent content flash
+    loading.value = true;
+    
     // Build new breadcrumbs
     const newBreadcrumbs = [...folderBreadcrumbs.value];
     
@@ -1499,16 +1502,6 @@ async function navigateToFolder(folder, fromUserAction = true) {
         path: folder.path
       });
     }
-    
-    folderBreadcrumbs.value = newBreadcrumbs;
-    currentFolder.value = folder;
-    selectedFile.value = null;
-    
-    console.log('Updated breadcrumbs:', folderBreadcrumbs.value);
-    console.log('Current folder set to:', currentFolder.value);
-    
-    // Load contents first - force refresh to bypass cache issues
-    console.log('🔄 About to load contents for folder:', folder.name, 'path:', folder.path);
     
     // Clear any existing request for this path to ensure fresh load
     if (activeRequests.value.loadContents) {
@@ -1525,6 +1518,17 @@ async function navigateToFolder(folder, fromUserAction = true) {
       console.log('🗑️ Forcing fresh load for path:', folder.path);
       // We'll let loadContents handle the cache logic, but the cleared lastRequestedPaths should help
     }
+    
+    // Update folder state AFTER loading is set to prevent content flash
+    folderBreadcrumbs.value = newBreadcrumbs;
+    currentFolder.value = folder;
+    selectedFile.value = null;
+    
+    console.log('Updated breadcrumbs:', folderBreadcrumbs.value);
+    console.log('Current folder set to:', currentFolder.value);
+    
+    // Load contents - force refresh to bypass cache issues
+    console.log('🔄 About to load contents for folder:', folder.name, 'path:', folder.path);
     
     await loadContents();
     console.log('✅ Contents loaded. Files count:', files.value.length, 'Folders count:', folders.value.length);

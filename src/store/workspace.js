@@ -16,6 +16,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const user = ref(null)
 
   const setCurrentWorkspace = (workspace) => {
+    // Preserve git_repo if the new workspace doesn't have it but the current one does
+    if (workspace && !workspace.git_repo && currentWorkspace.value?.git_repo) {
+      console.log('🔄 Preserving git_repo when setting current workspace:', currentWorkspace.value.git_repo)
+      workspace = { ...workspace, git_repo: currentWorkspace.value.git_repo }
+    }
+    
     currentWorkspace.value = workspace
     localStorage.setItem('current_workspace', JSON.stringify(workspace))
   }
@@ -276,10 +282,30 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         if (currentData !== newData) {
           console.log('🔄 Background refresh: Detected workspace data changes, updating UI')
           setWorkspaces(processed)
+          
+          // Ensure current workspace still has git_repo after update
+          if (currentWorkspaceId && currentGitRepo) {
+            const updatedCurrentWorkspace = processed.find(w => w.id === currentWorkspaceId)
+            if (updatedCurrentWorkspace && !updatedCurrentWorkspace.git_repo) {
+              console.log('🔄 Background refresh: Restoring git_repo to current workspace after update:', currentGitRepo)
+              updatedCurrentWorkspace.git_repo = currentGitRepo
+              setCurrentWorkspace(updatedCurrentWorkspace)
+            }
+          }
         } else {
           console.log('🔄 Background refresh: No data changes detected, but cache updated with fresh server data')
           // Still update the store to ensure we have the latest server data
           setWorkspaces(processed)
+          
+          // Ensure current workspace still has git_repo after update
+          if (currentWorkspaceId && currentGitRepo) {
+            const updatedCurrentWorkspace = processed.find(w => w.id === currentWorkspaceId)
+            if (updatedCurrentWorkspace && !updatedCurrentWorkspace.git_repo) {
+              console.log('🔄 Background refresh: Restoring git_repo to current workspace after silent update:', currentGitRepo)
+              updatedCurrentWorkspace.git_repo = currentGitRepo
+              setCurrentWorkspace(updatedCurrentWorkspace)
+            }
+          }
         }
       }
 

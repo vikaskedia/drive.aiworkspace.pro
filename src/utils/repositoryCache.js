@@ -32,6 +32,14 @@ function getCommitCacheKey(repoName) {
  */
 export async function getLatestCommitSha(giteaHost, giteaToken, repoName, branch = 'main') {
   try {
+    // Validate repoName before making API calls
+    if (!repoName) {
+      console.error('❌ getLatestCommitSha: No repoName provided, cannot make API call');
+      return null;
+    }
+    
+    console.log('🔗 getLatestCommitSha: Making API call with repoName:', repoName);
+    
     // Method 1: Use branches endpoint (FAST - only returns commit ID, no files)
     let url = `${giteaHost}/api/v1/repos/associateattorney/${repoName}/branches/${branch}`;
     
@@ -780,6 +788,13 @@ export function getAllCachedData(repoName) {
  */
 export async function fetchAndCacheFolderData(giteaHost, giteaToken, repoName, folderPath) {
   try {
+    // Validate repoName before making API call
+    if (!repoName) {
+      console.error('❌ fetchAndCacheFolderData: No repoName provided, cannot make API call');
+      return null;
+    }
+    
+    console.log('🔗 fetchAndCacheFolderData: Making API call with repoName:', repoName, 'folderPath:', folderPath);
     const url = `${giteaHost}/api/v1/repos/associateattorney/${repoName}/contents/${folderPath}`;
     
     const response = await fetch(url, {

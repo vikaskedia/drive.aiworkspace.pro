@@ -2465,6 +2465,94 @@ async function refreshCache() {
   }
 }
 
+// Clear all cache for current repository
+async function clearAllCache() {
+  if (!currentWorkspace.value) {
+    ElMessage.error('No workspace selected');
+    return;
+  }
+
+  // Check if git_repo is available, if not reload from URL
+  if (!currentWorkspace.value.git_repo) {
+    console.warn('No git_repo found in current workspace, reloading from URL');
+    
+    try {
+      await loadCurrentWorkspaceFromUrl();
+      
+      if (!currentWorkspace.value.git_repo) {
+        ElMessage.error('Cannot clear cache - no repository found');
+        return;
+      }
+    } catch (error) {
+      console.error('Error reloading workspace data:', error);
+      ElMessage.error('Failed to reload workspace data: ' + error.message);
+      return;
+    }
+  }
+
+  try {
+    // Show confirmation dialog
+    await ElMessageBox.confirm(
+      `This will permanently delete all cached data for "${currentWorkspace.value.title || currentWorkspace.value.git_repo}". This action cannot be undone.`,
+      'Clear Cache',
+      {
+        confirmButtonText: 'Clear Cache',
+        cancelButtonText: 'Cancel',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger'
+      }
+    );
+
+    // Show loading state
+    loading.value = true;
+    
+    // Clear all cache for current repository
+    clearRepositoryCache(currentWorkspace.value.git_repo);
+    
+    // Also clear any workspace-specific localStorage data
+    const workspaceId = currentWorkspace.value.id;
+    if (workspaceId) {
+      // Clear favorites for this workspace
+      localStorage.removeItem(`favorites_${workspaceId}`);
+      
+      // Clear any other workspace-specific data
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.includes(`workspace_${workspaceId}`) || 
+            key.includes(`repo_${currentWorkspace.value.git_repo}`)) {
+          localStorage.removeItem(key);
+        }
+      });
+    }
+    
+    // Clear current folder state to force fresh load
+    currentFolder.value = null;
+    folderBreadcrumbs.value = [];
+    files.value = [];
+    folders.value = [];
+    selectedFile.value = null;
+    
+    // Force reload contents from server (bypassing cache)
+    await loadContents();
+    
+    // Update last fetch time and cache status display
+    updateLastFetchTime();
+    if (cacheStatusRef.value) {
+      cacheStatusRef.value.updateStats();
+    }
+    
+    ElMessage.success('All cache cleared successfully');
+    
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('Error clearing cache:', error);
+      ElMessage.error('Failed to clear cache: ' + error.message);
+    }
+  } finally {
+    loading.value = false;
+  }
+}
+
 
 
 // Enhanced search functions
@@ -2870,6 +2958,9 @@ function removeFavorite(favorite) {
                     </el-dropdown-item>
                     <el-dropdown-item divided @click="refreshCache">
                       🔄 Refresh Cache
+                    </el-dropdown-item>
+                    <el-dropdown-item @click="clearAllCache" class="danger">
+                      🗑️ Clear Cache
                     </el-dropdown-item>
                     <el-dropdown-item divided @click="toggleColumnVisibility('type')">
                       {{ columnVisibility.type ? '✓' : '' }} Show Type Column

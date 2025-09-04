@@ -2417,6 +2417,7 @@ async function loadCurrentWorkspaceFromUrl() {
 }
 
 // Cache management functions
+/*
 async function refreshCache() {
   if (!currentWorkspace.value) {
     ElMessage.error('No workspace selected');
@@ -2464,7 +2465,7 @@ async function refreshCache() {
     loading.value = false;
   }
 }
-
+*/
 // Clear all cache for current repository
 async function clearAllCache() {
   if (!currentWorkspace.value) {
@@ -2956,11 +2957,11 @@ function removeFavorite(favorite) {
                     <el-dropdown-item @click="downloadWorkspace">
                       📦 Download Workspace (ZIP)
                     </el-dropdown-item>
-                    <el-dropdown-item divided @click="refreshCache">
+                    <!--el-dropdown-item divided @click="refreshCache">
                       🔄 Refresh Cache
-                    </el-dropdown-item>
+                    </el-dropdown-item-->
                     <el-dropdown-item @click="clearAllCache" class="danger">
-                      🗑️ Clear Cache
+                      🔄 Refresh Cache
                     </el-dropdown-item>
                     <el-dropdown-item divided @click="toggleColumnVisibility('type')">
                       {{ columnVisibility.type ? '✓' : '' }} Show Type Column

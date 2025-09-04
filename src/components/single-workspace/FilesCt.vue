@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { useWorkspaceStore } from '../../store/workspace';
 import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
+import { supabase } from '@aiworkspace/shared-header';
 import FilePreviewPane from './FilePreviewPane.vue';
 import CacheStatus from '../common/CacheStatus.vue';
 import { updateWorkspaceActivity } from '../../utils/workspaceActivity';
@@ -232,6 +233,25 @@ watch(currentWorkspace, async (newWorkspace, oldWorkspace) => {
   
   console.log('Workspace changed in FilesCt:', { newWorkspace, oldWorkspace })
   console.log('New workspace git_repo:', newWorkspace?.git_repo)
+  
+  // Handle case where git_repo becomes undefined during workspace change
+  if (newWorkspace && !newWorkspace.git_repo && oldWorkspace?.git_repo) {
+    console.warn('⚠️ git_repo became undefined, attempting to restore from old workspace or store')
+    
+    // Try to find the workspace in the store with git_repo
+    const workspaceInStore = workspaceStore.workspaces.find(w => w.id === newWorkspace.id && w.git_repo)
+    if (workspaceInStore) {
+      console.log('Found workspace with git_repo in store, updating current workspace')
+      workspaceStore.setCurrentWorkspace(workspaceInStore)
+      return
+    }
+    
+    // If not found in store, try to preserve the old git_repo
+    console.log('Preserving git_repo from old workspace:', oldWorkspace.git_repo)
+    const restoredWorkspace = { ...newWorkspace, git_repo: oldWorkspace.git_repo }
+    workspaceStore.setCurrentWorkspace(restoredWorkspace)
+    return
+  }
   
   if (newWorkspace && newWorkspace.git_repo) {
     console.log('✅ Workspace is ready with git_repo, proceeding with initialization')
@@ -539,9 +559,15 @@ onMounted(async () => {
   console.log('FilesCt onMounted - currentWorkspace:', currentWorkspace.value)
   console.log('FilesCt onMounted - git_repo:', currentWorkspace.value?.git_repo)
   
-  // Check if workspace is already ready
+  // First, try to load workspace from URL if not already loaded
+  if (!currentWorkspace.value || !currentWorkspace.value.git_repo) {
+    console.log('🔄 Loading workspace from URL...')
+    await loadCurrentWorkspaceFromUrl();
+  }
+  
+  // Check if workspace is now ready
   if (currentWorkspace.value && currentWorkspace.value.git_repo) {
-    console.log('✅ Workspace already ready, proceeding with initialization')
+    console.log('✅ Workspace ready, proceeding with initialization')
     updatePageTitle();
     updateLastFetchTime();
     
@@ -560,7 +586,7 @@ onMounted(async () => {
       loading.value = true; // Show loading for fresh data fetch
     }
   } else {
-    console.log('⏳ Workspace not ready yet, waiting for workspace to be set...')
+    console.log('⏳ Workspace still not ready, waiting for workspace to be set...')
   }
   
   // Add browser back/forward navigation listener
@@ -2096,11 +2122,90 @@ function closeAllSplits() {
 // Check if we're in split view mode
 const isInSplitView = computed(() => selectedFile.value || splitPanes.value.length > 0);
 
+// Simple workspace loading function
+async function loadCurrentWorkspaceFromUrl() {
+  try {
+    const route = useRoute();
+    const workspaceId = route.params.workspace_id;
+    
+    if (!workspaceId) {
+      console.log('No workspace_id in URL');
+      return;
+    }
+    
+    console.log('Loading workspace from URL:', workspaceId);
+    
+    // Get user first
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (!authUser) {
+      console.error('No authenticated user found');
+      return;
+    }
+    
+    // Fetch workspace directly from Supabase
+    const { data: workspace, error } = await supabase
+      .from('workspaces')
+      .select('id, title, description, parent_workspace_id, created_by, archived, created_at, git_repo')
+      .eq('id', workspaceId)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching workspace:', error);
+      return;
+    }
+    
+    if (workspace) {
+      // Process the workspace data
+      const processedWorkspace = {
+        id: workspace.id,
+        title: workspace.title,
+        description: workspace.description || 'No description',
+        parent_workspace_id: workspace.parent_workspace_id,
+        created_by: workspace.created_by,
+        archived: workspace.archived,
+        created_at: workspace.created_at,
+        git_repo: workspace.git_repo,
+        latest_activity: workspace.created_at,
+        hasAccess: true,
+        accessType: 'edit'
+      };
+      
+      console.log('✅ Loaded workspace from URL:', processedWorkspace);
+      console.log('✅ git_repo value:', processedWorkspace.git_repo);
+      
+      // Store in workspace store and browser storage
+      workspaceStore.setCurrentWorkspace(processedWorkspace);
+      
+      return processedWorkspace;
+    }
+  } catch (error) {
+    console.error('Error loading workspace from URL:', error);
+  }
+}
+
 // Cache management functions
 async function refreshCache() {
   if (!currentWorkspace.value) {
     ElMessage.error('No workspace selected');
     return;
+  }
+
+  // Check if git_repo is available, if not reload from URL
+  if (!currentWorkspace.value.git_repo) {
+    console.warn('No git_repo found in current workspace, reloading from URL');
+    
+    try {
+      await loadCurrentWorkspaceFromUrl();
+      
+      if (!currentWorkspace.value.git_repo) {
+        ElMessage.error('Unable to load workspace data. Please refresh the page.');
+        return;
+      }
+    } catch (error) {
+      console.error('Error reloading workspace data:', error);
+      ElMessage.error('Failed to reload workspace data: ' + error.message);
+      return;
+    }
   }
 
   try {

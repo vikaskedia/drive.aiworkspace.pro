@@ -245,7 +245,19 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       if (!silent) {
         setWorkspaces(processed)
       } else {
-        // For silent refresh, always update cache and UI with fresh data
+        // For silent refresh, preserve current workspace's git_repo if it exists
+        const currentWorkspaceId = currentWorkspace.value?.id
+        const currentGitRepo = currentWorkspace.value?.git_repo
+        
+        if (currentWorkspaceId && currentGitRepo) {
+          // Find the corresponding workspace in the new data
+          const updatedWorkspace = processed.find(w => w.id === currentWorkspaceId)
+          if (updatedWorkspace && !updatedWorkspace.git_repo) {
+            console.log('🔄 Background refresh: Preserving git_repo for current workspace:', currentGitRepo)
+            updatedWorkspace.git_repo = currentGitRepo
+          }
+        }
+        
         // Check for ANY changes (not just structure) like descriptions, activity, etc.
         const currentData = JSON.stringify(workspaces.value.map(w => ({ 
           id: w.id, 

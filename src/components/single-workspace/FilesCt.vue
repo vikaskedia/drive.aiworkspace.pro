@@ -35,7 +35,7 @@ const { currentWorkspace } = storeToRefs(workspaceStore);
 
 // Component state
 const files = ref([]);
-const loading = ref(false);
+const loading = ref(true); // Start with loading true to prevent "No files" flash
 const uploadDialogVisible = ref(false);
 const fileList = ref([]);
 const selectedFile = ref(null);
@@ -53,7 +53,6 @@ const filters = ref({
 });
 const downloadingFiles = ref(new Set());
 const isNavigating = ref(false);
-const isInitializing = ref(false);
 const cacheStatusRef = ref(null);
 const lastFetchTime = ref(null);
 
@@ -62,14 +61,88 @@ const isWorkspaceReady = computed(() => {
   return currentWorkspace.value && currentWorkspace.value.git_repo
 })
 
+// Function to save git_repo to localStorage using dedicated key
+function saveGitRepoToStorage(workspace) {
+  if (!workspace?.id || !workspace?.git_repo) return;
+  
+  try {
+    // Use dedicated key for git_repo persistence to avoid conflicts
+    const gitRepoKey = `workspace_git_repo_${workspace.id}`;
+    const gitRepoData = {
+      workspaceId: workspace.id,
+      git_repo: workspace.git_repo,
+      savedAt: new Date().toISOString()
+    };
+    localStorage.setItem(gitRepoKey, JSON.stringify(gitRepoData));
+    console.log('💾 Saved git_repo to dedicated localStorage key:', gitRepoKey, 'value:', workspace.git_repo);
+  } catch (error) {
+    console.error('Error saving git_repo to localStorage:', error);
+  }
+}
+
+// Function to restore git_repo from localStorage using dedicated key
+function restoreGitRepoFromStorage(workspace) {
+  if (!workspace?.id) return workspace;
+  
+  try {
+    // Use dedicated key for git_repo persistence to avoid conflicts
+    const gitRepoKey = `workspace_git_repo_${workspace.id}`;
+    const storedGitRepo = localStorage.getItem(gitRepoKey);
+    if (storedGitRepo) {
+      const parsed = JSON.parse(storedGitRepo);
+      if (parsed.workspaceId === workspace.id && parsed.git_repo && !workspace.git_repo) {
+        console.log('🔄 Restoring git_repo from dedicated localStorage key:', gitRepoKey, 'value:', parsed.git_repo);
+        return { ...workspace, git_repo: parsed.git_repo };
+      }
+    }
+  } catch (error) {
+    console.error('Error restoring git_repo from localStorage:', error);
+  }
+  
+  return workspace;
+}
+
+// Computed property to get workspace with preserved git_repo
+const workspaceWithGitRepo = computed(() => {
+  if (!currentWorkspace.value) return null;
+  
+  // If workspace has git_repo, save it and return it
+  if (currentWorkspace.value.git_repo) {
+    saveGitRepoToStorage(currentWorkspace.value);
+    return currentWorkspace.value;
+  }
+  
+  // Try to restore git_repo from localStorage
+  const restoredWorkspace = restoreGitRepoFromStorage(currentWorkspace.value);
+  if (restoredWorkspace.git_repo && restoredWorkspace !== currentWorkspace.value) {
+    // Update the store with the restored workspace
+    workspaceStore.setCurrentWorkspace(restoredWorkspace);
+    return restoredWorkspace;
+  }
+  
+  return currentWorkspace.value;
+})
+
 // Watch for workspace readiness
-watch(isWorkspaceReady, (ready) => {
+watch(isWorkspaceReady, async (ready) => {
   if (ready) {
     console.log('Workspace is now ready with git_repo:', currentWorkspace.value.git_repo)
     // Trigger any initialization that depends on git_repo
     updateLastFetchTime()
+    
+    // Ensure content is loaded when workspace becomes ready
+    console.log('🚀 Workspace ready, ensuring content is loaded...');
+    await loadContents();
   }
 })
+
+// Watch currentWorkspace and always save git_repo when it changes
+watch(currentWorkspace, (newWorkspace, oldWorkspace) => {
+  if (newWorkspace?.git_repo) {
+    console.log('🔄 Workspace changed, saving git_repo to localStorage:', newWorkspace.git_repo);
+    saveGitRepoToStorage(newWorkspace);
+  }
+}, { deep: true, immediate: true })
 
 // Enhanced filters search functionality
 const enhancedSearchMode = ref(false);
@@ -98,6 +171,39 @@ const activeRequests = ref({
 const lastRequestedPaths = ref({
   loadContents: ''
 });
+
+// Global loading timeout to prevent infinite loading
+let globalLoadingTimeout = null;
+
+// Function to set global loading timeout
+function setGlobalLoadingTimeout() {
+  // Clear any existing timeout
+  if (globalLoadingTimeout) {
+    clearTimeout(globalLoadingTimeout);
+  }
+  
+  // Set new timeout
+  globalLoadingTimeout = setTimeout(() => {
+    if (loading.value) {
+      console.log('⚠️ Global loading timeout reached, forcing loading state reset');
+      loading.value = false;
+      if (activeRequests.value.loadContents) {
+        activeRequests.value.loadContents.abort();
+        activeRequests.value.loadContents = null;
+      }
+      lastRequestedPaths.value.loadContents = '';
+      ElMessage.warning('Loading timeout. Please refresh the page if content doesn\'t appear.');
+    }
+  }, 15000); // 15 second global timeout
+}
+
+// Function to clear global loading timeout
+function clearGlobalLoadingTimeout() {
+  if (globalLoadingTimeout) {
+    clearTimeout(globalLoadingTimeout);
+    globalLoadingTimeout = null;
+  }
+}
 
 // Expose these refs to make them accessible from parent
 defineExpose({
@@ -221,225 +327,122 @@ const updateLastFetchTime = () => {
 
 // Watch workspace changes
 watch(currentWorkspace, async (newWorkspace, oldWorkspace) => {
-  // Skip if already initializing
-  if (isInitializing.value) {
-    return;
-  }
-  
   // Skip if workspace didn't actually change
   if (newWorkspace?.id === oldWorkspace?.id) {
     return;
   }
   
   console.log('Workspace changed in FilesCt:', { newWorkspace, oldWorkspace })
-  console.log('New workspace git_repo:', newWorkspace?.git_repo)
   
-  // Handle case where git_repo becomes undefined during workspace change
+  // If new workspace exists but has no git_repo, try to preserve it from old workspace
   if (newWorkspace && !newWorkspace.git_repo && oldWorkspace?.git_repo) {
-    console.warn('⚠️ git_repo became undefined, attempting to restore from old workspace or store')
-    
-    // Try to find the workspace in the store with git_repo
-    const workspaceInStore = workspaceStore.workspaces.find(w => w.id === newWorkspace.id && w.git_repo)
-    if (workspaceInStore) {
-      console.log('Found workspace with git_repo in store, updating current workspace')
-      workspaceStore.setCurrentWorkspace(workspaceInStore)
-      return
-    }
-    
-    // If not found in store, try to preserve the old git_repo
-    console.log('Preserving git_repo from old workspace:', oldWorkspace.git_repo)
-    const restoredWorkspace = { ...newWorkspace, git_repo: oldWorkspace.git_repo }
-    workspaceStore.setCurrentWorkspace(restoredWorkspace)
-    return
-  }
-  
-  // Additional check: if workspace exists but has no git_repo, try to restore it
-  if (newWorkspace && !newWorkspace.git_repo) {
-    console.warn('⚠️ Workspace exists but has no git_repo, attempting to restore')
-    
-    // Try to restore from localStorage first
-    const storedWorkspace = localStorage.getItem('current_workspace')
-    if (storedWorkspace) {
-      try {
-        const parsed = JSON.parse(storedWorkspace)
-        if (parsed.git_repo) {
-          console.log('Restoring git_repo from localStorage:', parsed.git_repo)
-          const restoredWorkspace = { ...newWorkspace, git_repo: parsed.git_repo }
-          workspaceStore.setCurrentWorkspace(restoredWorkspace)
-          return
-        }
-      } catch (error) {
-        console.error('Error parsing stored workspace:', error)
-      }
-    }
-    
-    // If no stored git_repo, try to reload from Supabase
-    console.log('No stored git_repo found, reloading from Supabase...')
-    ensureWorkspaceLoaded().then(success => {
-      if (!success) {
-        console.error('Failed to reload workspace from Supabase')
-      }
-    })
-    return
+    console.log('⚠️ git_repo lost during workspace change, preserving from old workspace:', oldWorkspace.git_repo);
+    const preservedWorkspace = { ...newWorkspace, git_repo: oldWorkspace.git_repo };
+    workspaceStore.setCurrentWorkspace(preservedWorkspace);
+    return;
   }
   
   if (newWorkspace && newWorkspace.git_repo) {
     console.log('✅ Workspace is ready with git_repo, proceeding with initialization')
     
+    // Always save the git_repo to localStorage for persistence using dedicated key
+    try {
+      const gitRepoKey = `workspace_git_repo_${newWorkspace.id}`;
+      const gitRepoData = {
+        workspaceId: newWorkspace.id,
+        git_repo: newWorkspace.git_repo,
+        savedAt: new Date().toISOString()
+      };
+      localStorage.setItem(gitRepoKey, JSON.stringify(gitRepoData));
+      console.log('💾 Saved git_repo to dedicated localStorage key on workspace change:', gitRepoKey, 'value:', newWorkspace.git_repo);
+    } catch (error) {
+      console.error('Error saving git_repo to localStorage:', error);
+    }
+    
     updatePageTitle();
     updateLastFetchTime();
-    
-    // Load favorites for this workspace
     loadFavorites();
     
-    // Check if we have cached content for this workspace before resetting
+    // Try to load cached content first
     const repoName = newWorkspace.git_repo;
     const cachedRootData = getCachedData(repoName, '');
     
     if (cachedRootData) {
-      // Load cached content immediately while initializing
       files.value = cachedRootData.files || [];
       folders.value = cachedRootData.folders || [];
+      loading.value = false; // Stop loading if we have cached data
+      console.log('✅ Loaded cached content for workspace:', newWorkspace.title);
     } else {
-      // Reset state only if no cache
-      files.value = [];
-      folders.value = [];
+      console.log('📡 No cached content found, will load from server');
     }
-  
-    // Reset navigation state
-    currentFolder.value = null;
-    folderBreadcrumbs.value = [];
-    selectedFile.value = null;
     
-    // Initialize immediately without delay
-    isInitializing.value = true;
-    try {
-      await initializeFromUrl();
-      
-      // Pre-load subfolders for better search performance
-      setTimeout(() => {
-        preloadSubfolders();
-      }, 1000); // Small delay to let initial load complete
-      
-    } finally {
-      isInitializing.value = false;
+    // Only reset navigation state if this is a truly new workspace
+    if (!oldWorkspace || oldWorkspace.id !== newWorkspace.id) {
+      currentFolder.value = null;
+      folderBreadcrumbs.value = [];
+      selectedFile.value = null;
     }
-  } else {
-    console.log('❌ Workspace is not ready - missing git_repo, waiting...')
+    
+    // Initialize from URL
+    await initializeFromUrl();
+    
+    // Ensure content is loaded if not already loaded
+    if (files.value.length === 0 && folders.value.length === 0 && !loading.value) {
+      console.log('🔄 No content loaded after initialization, triggering loadContents...');
+      await loadContents();
+    }
+    
+    // Fallback: If no content was loaded after a delay, try to load again
+    setTimeout(() => {
+      if (loading.value && files.value.length === 0 && folders.value.length === 0) {
+        console.log('⚠️ Fallback: No content loaded after delay, attempting fresh load...');
+        loadContents(true); // Force refresh
+      }
+    }, 3000); // 3 second fallback
+    
+    // Additional safety net: Force content load after 5 seconds if still no content
+    setTimeout(() => {
+      if (files.value.length === 0 && folders.value.length === 0 && newWorkspace?.git_repo) {
+        console.log('🚨 Safety net: Still no content after 5 seconds, forcing load...');
+        loadContents(true); // Force refresh
+      }
+    }, 5000); // 5 second safety net
   }
 }, { immediate: true });
 
 // Watch route changes for URL navigation and browser back/forward
 watch(() => route.query, async (newQuery, oldQuery) => {
-  console.log('Route watcher triggered:', { newQuery, oldQuery, isInitializing: isInitializing.value, isNavigating: isInitializing.value });
-  
-  // Prevent multiple initializations
-  if (isInitializing.value || isNavigating.value) {
-    console.log('Route watcher blocked - isInitializing or isNavigating');
+  if (isNavigating.value || !currentWorkspace.value) {
     return;
   }
   
   const queryChanged = JSON.stringify(newQuery) !== JSON.stringify(oldQuery);
-  if (queryChanged && currentWorkspace.value) {
-    console.log('URL changed, updating navigation state:', {
-      oldQuery,
-      newQuery
-    });
+  if (queryChanged) {
+    console.log('URL changed, updating navigation state:', { oldQuery, newQuery });
     
-    // Check if this is a browser back/forward navigation
     const newFolderParam = newQuery.folder;
-    const oldFolderParam = oldQuery.folder;
     const newFileParam = newQuery.file;
     
-    // Handle browser navigation for folder changes
-    if (newFolderParam !== oldFolderParam) {
-      console.log('Browser navigation detected - folder change:', {
-        from: oldFolderParam,
-        to: newFolderParam
-      });
-      
-      // Additional check: if we're navigating and the new folder matches our current navigation, skip
-      if (isNavigating.value && currentFolder.value && newFolderParam === encodeURIComponent(currentFolder.value.path)) {
-        console.log('Skipping route watcher - we are already navigating to this folder');
-        return;
-      }
-      
-      // Set flag to prevent our own URL updates from triggering this watcher
-      isNavigating.value = true;
-      
-      try {
-        // Handle the folder navigation based on URL
-        if (newFolderParam) {
-          const folderPath = decodeURIComponent(newFolderParam);
-          console.log('Browser navigating to folder:', folderPath);
-          await navigateToFolderByPath(folderPath, false); // Don't update URL during browser navigation
-        } else {
-          console.log('Browser navigating to root');
-          currentFolder.value = null;
-          folderBreadcrumbs.value = [];
-        }
-        
-        // Handle file selection
-        if (newFileParam) {
-          const fileName = decodeURIComponent(newFileParam);
-          const file = files.value.find(f => f.name === fileName);
-          if (file) {
-            selectedFile.value = file;
-          } else {
-            selectedFile.value = null;
-          }
-        } else {
-          selectedFile.value = null;
-        }
-        
-        // Load contents for the new folder
-        await loadContents();
-        
-      } catch (error) {
-        // Silent error handling
-      } finally {
-        // Reset navigation flag immediately
-        isNavigating.value = false;
-      }
-      
-      return; // Exit early to avoid the debounced initialization below
+    // Handle folder navigation
+    if (newFolderParam) {
+      const folderPath = decodeURIComponent(newFolderParam);
+      await navigateToFolderByPath(folderPath, false);
+    } else {
+      currentFolder.value = null;
+      folderBreadcrumbs.value = [];
     }
     
-    // Handle file selection changes without folder changes
-    if (newFileParam !== oldQuery.file && newFolderParam === oldFolderParam) {
-      console.log('Browser navigation detected - file selection change');
-      console.log('isNavigating:', isNavigating.value, 'newFileParam:', newFileParam, 'oldQuery.file:', oldQuery.file);
-      
-      // Only handle file deselection if we're not currently navigating
-      if (!newFileParam && !isNavigating.value) {
-        console.log('Clearing file selection due to URL change');
-        console.log('Current selectedFile before clearing:', selectedFile.value?.name);
-        selectedFile.value = null;
-      } else if (newFileParam) {
-        const fileName = decodeURIComponent(newFileParam);
-        // Try to find file in current files array, but don't fail if not found yet
-        const file = files.value.find(f => f.name === fileName);
-        if (file) {
-          selectedFile.value = file;
-          console.log('Browser restored file selection:', fileName);
-        } else {
-          console.log('File not found in current files array, will be restored after contents load:', fileName);
-          // Set a flag to restore file selection after contents load
-          selectedFile.value = { name: fileName, pending: true };
-        }
-      }
-      return; // Exit early
+    // Handle file selection
+    if (newFileParam) {
+      const fileName = decodeURIComponent(newFileParam);
+      const file = files.value.find(f => f.name === fileName);
+      selectedFile.value = file || null;
+    } else {
+      selectedFile.value = null;
     }
     
-    // Initialize immediately if not already initializing
-    if (!isInitializing.value) {
-      isInitializing.value = true;
-      try {
-        await initializeFromUrl();
-      } finally {
-        isInitializing.value = false;
-      }
-    }
+    // Load contents for the new folder
+    await loadContents();
   }
 }, { deep: true });
 
@@ -459,25 +462,18 @@ watch(selectedFile, (newFile, oldFile) => {
 
 // Initialize from URL parameters
 async function initializeFromUrl() {
-  if (!currentWorkspace.value) {
-    return;
-  }
-  
-  if (!currentWorkspace.value.git_repo) {
+  if (!currentWorkspace.value?.git_repo) {
     return;
   }
   
   const folderParam = route.query.folder;
   const fileParam = route.query.file;
   
-  // Set navigation flag to prevent route updates during initialization
-  isNavigating.value = true;
-  
   try {
-    // Handle folder navigation - rely entirely on URL parameters
+    // Handle folder navigation
     if (folderParam) {
       const folderPath = decodeURIComponent(folderParam);
-      await navigateToFolderByPath(folderPath, false); // Don't update URL during initialization
+      await navigateToFolderByPath(folderPath, false);
     } else {
       currentFolder.value = null;
       folderBreadcrumbs.value = [];
@@ -490,32 +486,20 @@ async function initializeFromUrl() {
     if (fileParam) {
       const fileName = decodeURIComponent(fileParam);
       const file = files.value.find(f => f.name === fileName);
-      if (file) {
-        selectedFile.value = file;
-      } else {
-        selectedFile.value = null;
-      }
+      selectedFile.value = file || null;
     } else {
       selectedFile.value = null;
     }
     
-    // Update title now that breadcrumbs and selection have been established
     updatePageTitle();
     
   } catch (error) {
-    ElMessage.error('Error loading folder: ' + error.message);
-    
+    console.error('Error in initializeFromUrl:', error);
     // Fallback: load root contents
-    try {
-      currentFolder.value = null;
-      folderBreadcrumbs.value = [];
-      selectedFile.value = null;
-      await loadContents();
-    } catch (fallbackError) {
-      // Silent fallback error
-    }
-  } finally {
-    isNavigating.value = false;
+    currentFolder.value = null;
+    folderBreadcrumbs.value = [];
+    selectedFile.value = null;
+    await loadContents();
   }
 }
 
@@ -587,38 +571,52 @@ async function navigateToFolderByPath(folderPath, updateUrl = true) {
 // Lifecycle hooks
 onMounted(async () => {
   console.log('FilesCt onMounted - currentWorkspace:', currentWorkspace.value)
-  console.log('FilesCt onMounted - git_repo:', currentWorkspace.value?.git_repo)
   
-  // First, ensure workspace is properly loaded from Supabase
-  const workspaceLoaded = await ensureWorkspaceLoaded();
-  if (!workspaceLoaded) {
-    console.error('Failed to load workspace from Supabase');
-    ElMessage.error('Failed to load workspace. Please refresh the page.');
-    return;
-  }
-  
-  // Check if workspace is now ready
-  if (currentWorkspace.value && currentWorkspace.value.git_repo) {
-    console.log('✅ Workspace ready, proceeding with initialization')
-    updatePageTitle();
-    updateLastFetchTime();
+  // Always save git_repo to localStorage on mount if available using dedicated key
+  if (currentWorkspace.value?.git_repo) {
+    try {
+      const gitRepoKey = `workspace_git_repo_${currentWorkspace.value.id}`;
+      const gitRepoData = {
+        workspaceId: currentWorkspace.value.id,
+        git_repo: currentWorkspace.value.git_repo,
+        savedAt: new Date().toISOString()
+      };
+      localStorage.setItem(gitRepoKey, JSON.stringify(gitRepoData));
+      console.log('💾 Saved git_repo to dedicated localStorage key on mount:', gitRepoKey, 'value:', currentWorkspace.value.git_repo);
+    } catch (error) {
+      console.error('Error saving git_repo to localStorage on mount:', error);
+    }
     
-    // Load favorites for current workspace
-    loadFavorites();
-    
-    // IMMEDIATE CACHE CHECK - Try to show cached content if commit matches
     const repoName = currentWorkspace.value.git_repo;
     const cachedData = getCachedData(repoName, '');
-    const storedCommitSha = getCachedCommitSha(repoName);
     
-    if (cachedData && storedCommitSha) {
-      // Don't set loading to true yet - let loadContents handle the commit check
-      console.log('Found cached data, will check commit')
+    if (cachedData) {
+      files.value = cachedData.files || [];
+      folders.value = cachedData.folders || [];
+      loading.value = false; // Stop loading if we have cached data
+      console.log('✅ Loaded cached content on mount for workspace:', currentWorkspace.value.title);
     } else {
-      loading.value = true; // Show loading for fresh data fetch
+      console.log('📡 No cached content found on mount, will load from server');
+      // If no cached data, trigger immediate load
+      console.log('🚀 Triggering immediate content load on mount...');
+      await loadContents();
     }
-  } else {
-    console.log('⏳ Workspace still not ready, waiting for workspace to be set...')
+    
+    // Fallback: If no content was loaded after a delay, try to load again
+    setTimeout(() => {
+      if (loading.value && files.value.length === 0 && folders.value.length === 0) {
+        console.log('⚠️ Fallback on mount: No content loaded after delay, attempting fresh load...');
+        loadContents(true); // Force refresh
+      }
+    }, 3000); // 3 second fallback
+    
+    // Additional safety net: Force content load after 5 seconds if still no content
+    setTimeout(() => {
+      if (files.value.length === 0 && folders.value.length === 0 && currentWorkspace.value?.git_repo) {
+        console.log('🚨 Safety net: Still no content after 5 seconds, forcing load...');
+        loadContents(true); // Force refresh
+      }
+    }, 5000); // 5 second safety net
   }
   
   // Add browser back/forward navigation listener
@@ -627,8 +625,6 @@ onMounted(async () => {
   };
   
   window.addEventListener('popstate', handlePopState);
-  
-
   
   // Store the cleanup function
   const cleanup = () => {
@@ -644,6 +640,7 @@ onUnmounted(() => {
     activeRequests.value.loadContents.abort();
   }
   lastRequestedPaths.value.loadContents = '';
+  clearGlobalLoadingTimeout(); // Clear global timeout on unmount
 });
 
 // Validate Gitea configuration
@@ -683,90 +680,67 @@ window.fetch = function(...args) {
   return originalFetch.apply(this, args);
 };
 
-// Load files and folders from Gitea (improved commit-based caching)
+// Load files and folders from Gitea (simplified)
 async function loadContents(forceRefresh = false) {
-  const callId = Math.random().toString(36).substr(2, 9);
-  console.log(`🔄 [${callId}] loadContents called for path:`, currentFolder.value?.path || 'root', 'forceRefresh:', forceRefresh);
+  console.log('loadContents called for path:', currentFolder.value?.path || 'root', 'forceRefresh:', forceRefresh);
   
-  if (!currentWorkspace.value) {
-    console.log('loadContents: No currentWorkspace, waiting...')
+  // Try to get workspace with git_repo, with multiple fallback attempts
+  let workspace = workspaceWithGitRepo.value;
+  
+  // If still no git_repo, try to restore from localStorage directly
+  if (!workspace?.git_repo) {
+    console.log('loadContents: No git_repo found, attempting direct restoration from localStorage...');
+    try {
+      const gitRepoKey = `workspace_git_repo_${currentWorkspace.value?.id}`;
+      const storedGitRepo = localStorage.getItem(gitRepoKey);
+      if (storedGitRepo) {
+        const parsed = JSON.parse(storedGitRepo);
+        if (parsed.git_repo && parsed.workspaceId === currentWorkspace.value?.id) {
+          console.log('🔄 loadContents: Direct restoration of git_repo from dedicated localStorage key:', gitRepoKey, 'value:', parsed.git_repo);
+          const restoredWorkspace = { ...currentWorkspace.value, git_repo: parsed.git_repo };
+          workspaceStore.setCurrentWorkspace(restoredWorkspace);
+          workspace = restoredWorkspace;
+        }
+      }
+    } catch (error) {
+      console.error('Error in loadContents direct restoration:', error);
+    }
+  }
+  
+  if (!workspace?.git_repo) {
+    console.log('loadContents: No workspace or git_repo available after all attempts');
     return;
   }
-  
-  if (!currentWorkspace.value.git_repo) {
-    console.log('loadContents: No git_repo in currentWorkspace, ensuring workspace is loaded...')
-    console.log('Current workspace state:', currentWorkspace.value)
-    
-    // First try to ensure workspace is loaded from Supabase
-    const workspaceLoaded = await ensureWorkspaceLoaded();
-    if (!workspaceLoaded) {
-      console.error('Failed to load workspace from Supabase in loadContents');
-      return;
-    }
-    
-    // If still no git_repo after loading from Supabase, try fallback methods
-    if (!currentWorkspace.value.git_repo) {
-      console.log('Still no git_repo after Supabase load, trying fallback methods...')
-      
-      // Try to get git_repo from currentFolder if available
-      if (currentFolder.value?.repository) {
-        const repoName = currentFolder.value.repository.split('/')[1]; // Extract repo name from "associateattorney/repo-name"
-        console.log('Found repository in currentFolder, using git_repo:', repoName);
-        
-        // Update the workspace with the git_repo
-        const updatedWorkspace = { ...currentWorkspace.value, git_repo: repoName };
-        workspaceStore.setCurrentWorkspace(updatedWorkspace);
-        
-        console.log('Updated workspace with git_repo:', repoName);
-      } else if (files.value.length > 0 && files.value[0]?.repository) {
-        // Try to get git_repo from existing files if currentFolder doesn't have it
-        const repoName = files.value[0].repository.split('/')[1];
-        console.log('Found repository in existing files, using git_repo:', repoName);
-        
-        const updatedWorkspace = { ...currentWorkspace.value, git_repo: repoName };
-        workspaceStore.setCurrentWorkspace(updatedWorkspace);
-        
-        console.log('Updated workspace with git_repo from files:', repoName);
-      } else {
-        // Last resort: try to use "legal-studio" as git_repo (based on console logs)
-        const fallbackGitRepo = 'legal-studio';
-        console.log('Using fallback git_repo:', fallbackGitRepo);
-        
-        const updatedWorkspace = { ...currentWorkspace.value, git_repo: fallbackGitRepo };
-        workspaceStore.setCurrentWorkspace(updatedWorkspace);
-      }
-    }
-  }
-  
-  console.log('✅ loadContents: Workspace ready, proceeding with git_repo:', currentWorkspace.value.git_repo)
   
   if (!validateGiteaConfig()) {
     return;
   }
   
   const path = currentFolder.value?.path || '';
-  const repoName = currentWorkspace.value.git_repo;
+  const repoName = workspace.git_repo;
   
   // Cancel previous request if different path
   if (activeRequests.value.loadContents && lastRequestedPaths.value.loadContents !== path) {
+    console.log('🔄 Cancelling previous request for different path:', lastRequestedPaths.value.loadContents, '->', path);
     activeRequests.value.loadContents.abort();
   } else if (activeRequests.value.loadContents && lastRequestedPaths.value.loadContents === path) {
-    // Same request already in progress, wait for it
-    try {
-      await new Promise((resolve) => {
-        const checkComplete = () => {
-          if (!activeRequests.value.loadContents) {
-            resolve();
-          } else {
-            requestAnimationFrame(checkComplete);
-          }
-        };
-        checkComplete();
-      });
-      return;
-    } catch (error) {
-      // Continue with new request
-    }
+    // Same request already in progress, but add a timeout to prevent infinite loading
+    console.log('⏳ Same request already in progress, waiting...');
+    
+    // Set a timeout to prevent infinite loading
+    setTimeout(() => {
+      if (loading.value && activeRequests.value.loadContents) {
+        console.log('⚠️ Request timeout detected, forcing retry...');
+        activeRequests.value.loadContents.abort();
+        activeRequests.value.loadContents = null;
+        lastRequestedPaths.value.loadContents = '';
+        loading.value = false;
+        // Retry the request
+        loadContents(forceRefresh);
+      }
+    }, 10000); // 10 second timeout
+    
+    return;
   }
   
   lastRequestedPaths.value.loadContents = path;
@@ -775,119 +749,58 @@ async function loadContents(forceRefresh = false) {
   activeRequests.value.loadContents = abortController;
   
   try {
-    const startTime = performance.now();
     const giteaHost = import.meta.env.VITE_GITEA_HOST;
     const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
     
-    // Step 1: Get latest commit SHA from Gitea first (with deduplication)
-    console.log(`🔍 [${callId}] Getting latest commit SHA for repo:`, repoName);
-    
-    let latestCommitSha;
-    const requestKey = `${repoName}_${giteaHost}`;
-    
-    // Check if there's already an ongoing request for this repo
-    if (ongoingCommitRequests.has(requestKey)) {
-      console.log(`⏳ [${callId}] Waiting for ongoing commit SHA request for repo:`, repoName);
-      latestCommitSha = await ongoingCommitRequests.get(requestKey);
-    } else {
-      // Create a new request and store the promise
-      const commitPromise = getLatestCommitSha(giteaHost, giteaToken, repoName);
-      ongoingCommitRequests.set(requestKey, commitPromise);
-      
-      try {
-        latestCommitSha = await commitPromise;
-        console.log(`📋 [${callId}] Latest commit SHA:`, latestCommitSha);
-      } finally {
-        // Clean up the ongoing request
-        ongoingCommitRequests.delete(requestKey);
-      }
-    }
-    
-    if (!latestCommitSha) {
-      // Show a one-time notification about caching being disabled
-      if (!sessionStorage.getItem('cache-fallback-notified')) {
-        ElMessage({
-          message: 'Repository not found. Smart caching is disabled. Files will load normally.',
-          type: 'warning',
-          duration: 8000,
-          showClose: true
-        });
-        sessionStorage.setItem('cache-fallback-notified', 'true');
-        
-        // Also show a notification with action to create repository
-        setTimeout(() => {
-          ElMessage({
-            message: 'Would you like to initialize the repository? Check console for details.',
-            type: 'info',
-            duration: 10000,
-            showClose: true
-          });
-        }, 1000);
-      }
-      
-      return await loadContentsDirectly(path, abortController);
-    }
-    
-    // Step 2: Check stored commit ID in localStorage
-    const storedCommitSha = getCachedCommitSha(repoName);
-    
-    // Step 3: Compare commit IDs and decide action
-    if (!forceRefresh && storedCommitSha && storedCommitSha === latestCommitSha) {
-      // ✅ Commit IDs match - load from cache (unless force refresh is requested)
+    // Check cache first (unless force refresh)
+    if (!forceRefresh) {
       const cachedData = getCachedData(repoName, path);
       if (cachedData) {
-        console.log('📦 Loading from cache for path:', path, 'Files:', cachedData.files?.length || 0, 'Folders:', cachedData.folders?.length || 0);
+        console.log('Loading from cache for path:', path);
         files.value = cachedData.files || [];
         folders.value = cachedData.folders || [];
-        
-        // Restore pending file selection if any
-        if (selectedFile.value && selectedFile.value.pending) {
-          const pendingFileName = selectedFile.value.name;
-          const actualFile = files.value.find(f => f.name === pendingFileName);
-          if (actualFile) {
-            console.log('Restoring pending file selection from cache:', pendingFileName);
-            selectedFile.value = actualFile;
-          } else {
-            console.log('Pending file not found in cached contents, clearing selection:', pendingFileName);
-            selectedFile.value = null;
-          }
-        }
-        
+        loading.value = false;
         updateLastFetchTime();
         return;
-      } else {
-        console.log('⚠️ No cached data found for path:', path, 'even though commit SHA matches');
-      }
-    } else {
-      if (forceRefresh) {
-        console.log('🔄 Force refresh requested - bypassing cache');
-      } else {
-        console.log('🔄 Commit SHA mismatch or no stored SHA. Stored:', storedCommitSha, 'Latest:', latestCommitSha);
       }
     }
     
-    // Step 4: Fetch fresh data from Gitea
+    // Fetch fresh data from Gitea
     loading.value = true;
+    setGlobalLoadingTimeout(); // Set global timeout to prevent infinite loading
     
     const freshData = await loadContentsDirectly(path, abortController);
     
     if (freshData) {
-      // Step 5: Store commit ID and content in cache
-      setCachedData(repoName, path, latestCommitSha, files.value, folders.value);
-      // Update last fetch time display
+      // Get latest commit SHA and cache the data
+      try {
+        const latestCommitSha = await getLatestCommitSha(giteaHost, giteaToken, repoName);
+        if (latestCommitSha) {
+          setCachedData(repoName, path, latestCommitSha, files.value, folders.value);
+        }
+      } catch (error) {
+        console.warn('Failed to get commit SHA for caching:', error);
+      }
+      
       updateLastFetchTime();
     }
     
   } catch (error) {
     if (error.name !== 'AbortError') {
-      // Fallback to direct loading
-      return await loadContentsDirectly(path, abortController);
+      console.error('Error in loadContents:', error);
+      // Show user-friendly error message
+      ElMessage.error('Failed to load files. Please try again.');
     }
   } finally {
+    // Always ensure loading state is reset
     loading.value = false;
+    clearGlobalLoadingTimeout(); // Clear global timeout
     if (activeRequests.value.loadContents === abortController) {
       activeRequests.value.loadContents = null;
     }
+    // Clear the last requested path to allow retries
+    lastRequestedPaths.value.loadContents = '';
+    console.log('✅ loadContents completed, loading state reset');
   }
 }
 
@@ -973,14 +886,36 @@ async function loadContentsDirectly(path, abortController) {
     const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
     
     // Validate git_repo before making API call
-    if (!currentWorkspace.value?.git_repo) {
-      console.error('❌ loadContentsDirectly: No git_repo available, cannot make API call');
+    let workspace = workspaceWithGitRepo.value;
+    
+    // If still no git_repo, try to restore from localStorage directly
+    if (!workspace?.git_repo) {
+      console.log('loadContentsDirectly: No git_repo found, attempting direct restoration from localStorage...');
+      try {
+        const gitRepoKey = `workspace_git_repo_${currentWorkspace.value?.id}`;
+        const storedGitRepo = localStorage.getItem(gitRepoKey);
+        if (storedGitRepo) {
+          const parsed = JSON.parse(storedGitRepo);
+          if (parsed.git_repo && parsed.workspaceId === currentWorkspace.value?.id) {
+            console.log('🔄 loadContentsDirectly: Direct restoration of git_repo from dedicated localStorage key:', gitRepoKey, 'value:', parsed.git_repo);
+            const restoredWorkspace = { ...currentWorkspace.value, git_repo: parsed.git_repo };
+            workspaceStore.setCurrentWorkspace(restoredWorkspace);
+            workspace = restoredWorkspace;
+          }
+        }
+      } catch (error) {
+        console.error('Error in loadContentsDirectly direct restoration:', error);
+      }
+    }
+    
+    if (!workspace?.git_repo) {
+      console.error('❌ loadContentsDirectly: No git_repo available after all attempts, cannot make API call');
       console.error('Current workspace state:', currentWorkspace.value);
       throw new Error('No git_repo available for API call');
     }
     
-    console.log('🔗 loadContentsDirectly: Making API call with git_repo:', currentWorkspace.value.git_repo, 'path:', path);
-    const url = `${giteaHost}/api/v1/repos/associateattorney/${currentWorkspace.value.git_repo}/contents/${path}`;
+    console.log('🔗 loadContentsDirectly: Making API call with git_repo:', workspace.git_repo, 'path:', path);
+    const url = `${giteaHost}/api/v1/repos/associateattorney/${workspace.git_repo}/contents/${path}`;
     
     const response = await fetch(url, {
       method: 'GET',
@@ -1011,7 +946,7 @@ async function loadContentsDirectly(path, abortController) {
         const rootAbortController = new AbortController();
         activeRequests.value.loadContents = rootAbortController;
         
-        const rootUrl = `${import.meta.env.VITE_GITEA_HOST}/api/v1/repos/associateattorney/${currentWorkspace.value.git_repo}/contents/`;
+        const rootUrl = `${import.meta.env.VITE_GITEA_HOST}/api/v1/repos/associateattorney/${workspace.git_repo}/contents/`;
         const rootResponse = await fetch(rootUrl, {
           method: 'GET',
           headers: getGiteaHeaders(import.meta.env.VITE_GITEA_TOKEN),
@@ -1029,7 +964,7 @@ async function loadContentsDirectly(path, abortController) {
             // Create raw download URL with token parameter (like your old app)
             const giteaHost = import.meta.env.VITE_GITEA_HOST;
             const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
-            const rawDownloadUrl = `${giteaHost}/associateattorney/${currentWorkspace.value.git_repo}/raw/branch/main/${item.path}?token=${giteaToken}`;
+            const rawDownloadUrl = `${giteaHost}/associateattorney/${workspace.git_repo}/raw/branch/main/${item.path}?token=${giteaToken}`;
             
             return {
               id: item.sha,
@@ -1038,7 +973,7 @@ async function loadContentsDirectly(path, abortController) {
               size: item.size,
               path: item.path,
               download_url: rawDownloadUrl,
-              repository: `associateattorney/${currentWorkspace.value.git_repo}`,
+              repository: `associateattorney/${workspace.git_repo}`,
               sha: item.sha,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
@@ -1050,7 +985,7 @@ async function loadContentsDirectly(path, abortController) {
             name: item.name,
             type: 'dir',
             path: item.path,
-            repository: `associateattorney/${currentWorkspace.value.git_repo}`,
+            repository: `associateattorney/${workspace.git_repo}`,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           }));
@@ -1088,7 +1023,7 @@ async function loadContentsDirectly(path, abortController) {
       // Create raw download URL with token parameter (like your old app)
       const giteaHost = import.meta.env.VITE_GITEA_HOST;
       const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
-      const rawDownloadUrl = `${giteaHost}/associateattorney/${currentWorkspace.value.git_repo}/raw/branch/main/${item.path}?token=${giteaToken}`;
+      const rawDownloadUrl = `${giteaHost}/associateattorney/${workspace.git_repo}/raw/branch/main/${item.path}?token=${giteaToken}`;
       
       return {
         id: item.sha,
@@ -1097,7 +1032,7 @@ async function loadContentsDirectly(path, abortController) {
         size: item.size,
         path: item.path,
         download_url: rawDownloadUrl,
-        repository: `associateattorney/${currentWorkspace.value.git_repo}`,
+        repository: `associateattorney/${workspace.git_repo}`,
         sha: item.sha,
         created_at: new Date().toISOString(), // Gitea doesn't provide creation time in contents API
         updated_at: new Date().toISOString()
@@ -1125,7 +1060,7 @@ async function loadContentsDirectly(path, abortController) {
       name: item.name,
       type: 'dir',
       path: item.path,
-      repository: `associateattorney/${currentWorkspace.value.git_repo}`,
+      repository: `associateattorney/${workspace.git_repo}`,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }));
@@ -1426,22 +1361,33 @@ async function navigateToFolder(folder, fromUserAction = true) {
   try {
     console.log('Navigating to folder:', folder.name, 'path:', folder.path);
     
-    // Ensure workspace has git_repo before proceeding
-    if (!currentWorkspace.value?.git_repo) {
-      console.log('No git_repo in workspace, ensuring workspace is loaded...');
-      
-      const workspaceLoaded = await ensureWorkspaceLoaded();
-      if (!workspaceLoaded) {
-        console.error('Cannot navigate to folder - failed to load workspace');
-        ElMessage.error('Workspace not properly loaded. Please refresh the page.');
-        return;
+    // Try to get workspace with git_repo, with multiple fallback attempts
+    let workspace = workspaceWithGitRepo.value;
+    
+    // If still no git_repo, try to restore from localStorage directly
+    if (!workspace?.git_repo) {
+      console.log('No git_repo found, attempting direct restoration from localStorage...');
+      try {
+        const gitRepoKey = `workspace_git_repo_${currentWorkspace.value?.id}`;
+        const storedGitRepo = localStorage.getItem(gitRepoKey);
+        if (storedGitRepo) {
+          const parsed = JSON.parse(storedGitRepo);
+          if (parsed.git_repo && parsed.workspaceId === currentWorkspace.value?.id) {
+            console.log('🔄 Direct restoration of git_repo from dedicated localStorage key:', gitRepoKey, 'value:', parsed.git_repo);
+            const restoredWorkspace = { ...currentWorkspace.value, git_repo: parsed.git_repo };
+            workspaceStore.setCurrentWorkspace(restoredWorkspace);
+            workspace = restoredWorkspace;
+          }
+        }
+      } catch (error) {
+        console.error('Error in direct restoration:', error);
       }
-      
-      if (!currentWorkspace.value?.git_repo) {
-        console.error('Cannot navigate to folder - no git_repo available after loading');
-        ElMessage.error('Workspace not properly loaded. Please refresh the page.');
-        return;
-      }
+    }
+    
+    if (!workspace?.git_repo) {
+      console.error('Cannot navigate to folder - no git_repo available after all attempts');
+      ElMessage.error('Workspace not properly loaded. Please refresh the page.');
+      return;
     }
     
     // Set navigation flag to prevent route watcher from triggering
@@ -2333,87 +2279,10 @@ function closeAllSplits() {
 // Check if we're in split view mode
 const isInSplitView = computed(() => selectedFile.value || splitPanes.value.length > 0);
 
-// Ensure workspace is properly loaded from Supabase
-async function ensureWorkspaceLoaded() {
-  // If workspace already has git_repo, we're good
-  if (currentWorkspace.value?.git_repo) {
-    console.log('✅ Workspace already loaded with git_repo:', currentWorkspace.value.git_repo);
-    return true;
-  }
-  
-  console.log('🔄 Ensuring workspace is loaded from Supabase...');
-  
-  try {
-    // Get workspace ID from route
-    let workspaceId = route.params.workspace_id;
-    
-    // Fallback: use current workspace ID if route params are not available
-    if (!workspaceId && currentWorkspace.value?.id) {
-      workspaceId = currentWorkspace.value.id;
-      console.log('Using current workspace ID as fallback:', workspaceId);
-    }
-    
-    if (!workspaceId) {
-      console.error('No workspace_id available from route or current workspace');
-      return false;
-    }
-    
-    console.log('Loading workspace from Supabase with ID:', workspaceId);
-    
-    // Get user first
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (!authUser) {
-      console.error('No authenticated user found');
-      return false;
-    }
-    
-    // Fetch workspace directly from Supabase
-    const { data: workspace, error } = await supabase
-      .from('workspaces')
-      .select('id, title, description, parent_workspace_id, created_by, archived, created_at, git_repo')
-      .eq('id', workspaceId)
-      .single();
-    
-    if (error) {
-      console.error('Error fetching workspace:', error);
-      return false;
-    }
-    
-    if (workspace) {
-      // Process the workspace data
-      const processedWorkspace = {
-        id: workspace.id,
-        title: workspace.title,
-        description: workspace.description || 'No description',
-        parent_workspace_id: workspace.parent_workspace_id,
-        created_by: workspace.created_by,
-        archived: workspace.archived,
-        created_at: workspace.created_at,
-        git_repo: workspace.git_repo,
-        latest_activity: workspace.created_at,
-        hasAccess: true,
-        accessType: 'edit'
-      };
-      
-      console.log('✅ Loaded workspace from Supabase:', processedWorkspace);
-      console.log('✅ git_repo value:', processedWorkspace.git_repo);
-      
-      // Store in workspace store and browser storage
-      workspaceStore.setCurrentWorkspace(processedWorkspace);
-      
-      return true;
-    }
-    
-    return false;
-  } catch (error) {
-    console.error('Error ensuring workspace is loaded:', error);
-    return false;
-  }
-}
-
-// Simple workspace loading function (kept for backward compatibility)
+// Simple workspace loading function
 async function loadCurrentWorkspaceFromUrl() {
-  return await ensureWorkspaceLoaded();
+  // This function is kept for backward compatibility but simplified
+  return currentWorkspace.value?.git_repo ? true : false;
 }
 
 // Cache management functions
@@ -2473,28 +2342,39 @@ async function clearAllCache() {
     return;
   }
 
-  // Check if git_repo is available, if not reload from URL
-  if (!currentWorkspace.value.git_repo) {
-    console.warn('No git_repo found in current workspace, reloading from URL');
-    
+  // Try to get workspace with git_repo, with multiple fallback attempts
+  let workspace = workspaceWithGitRepo.value;
+  
+  // If still no git_repo, try to restore from localStorage directly
+  if (!workspace?.git_repo) {
+    console.log('clearAllCache: No git_repo found, attempting direct restoration from localStorage...');
     try {
-      await loadCurrentWorkspaceFromUrl();
-      
-      if (!currentWorkspace.value.git_repo) {
-        ElMessage.error('Cannot clear cache - no repository found');
-        return;
+      const gitRepoKey = `workspace_git_repo_${currentWorkspace.value?.id}`;
+      const storedGitRepo = localStorage.getItem(gitRepoKey);
+      if (storedGitRepo) {
+        const parsed = JSON.parse(storedGitRepo);
+        if (parsed.git_repo && parsed.workspaceId === currentWorkspace.value?.id) {
+          console.log('🔄 clearAllCache: Direct restoration of git_repo from dedicated localStorage key:', gitRepoKey, 'value:', parsed.git_repo);
+          const restoredWorkspace = { ...currentWorkspace.value, git_repo: parsed.git_repo };
+          workspaceStore.setCurrentWorkspace(restoredWorkspace);
+          workspace = restoredWorkspace;
+        }
       }
     } catch (error) {
-      console.error('Error reloading workspace data:', error);
-      ElMessage.error('Failed to reload workspace data: ' + error.message);
-      return;
+      console.error('Error in clearAllCache direct restoration:', error);
     }
+  }
+
+  // Check if git_repo is available after all attempts
+  if (!workspace?.git_repo) {
+    ElMessage.error('Cannot clear cache - no repository found after all attempts');
+    return;
   }
 
   try {
     // Show confirmation dialog
     await ElMessageBox.confirm(
-      `This will permanently delete all cached data for "${currentWorkspace.value.title || currentWorkspace.value.git_repo}". This action cannot be undone.`,
+      `This will permanently delete all cached data for "${workspace.title || workspace.git_repo}". This action cannot be undone.`,
       'Clear Cache',
       {
         confirmButtonText: 'Clear Cache',
@@ -2508,19 +2388,24 @@ async function clearAllCache() {
     loading.value = true;
     
     // Clear all cache for current repository
-    clearRepositoryCache(currentWorkspace.value.git_repo);
+    clearRepositoryCache(workspace.git_repo);
     
     // Also clear any workspace-specific localStorage data
-    const workspaceId = currentWorkspace.value.id;
+    const workspaceId = workspace.id;
     if (workspaceId) {
       // Clear favorites for this workspace
       localStorage.removeItem(`favorites_${workspaceId}`);
+      
+      // Clear the dedicated git_repo storage as well
+      const gitRepoKey = `workspace_git_repo_${workspaceId}`;
+      localStorage.removeItem(gitRepoKey);
+      console.log('🗑️ Cleared dedicated git_repo storage:', gitRepoKey);
       
       // Clear any other workspace-specific data
       const keys = Object.keys(localStorage);
       keys.forEach(key => {
         if (key.includes(`workspace_${workspaceId}`) || 
-            key.includes(`repo_${currentWorkspace.value.git_repo}`)) {
+            key.includes(`repo_${workspace.git_repo}`)) {
           localStorage.removeItem(key);
         }
       });

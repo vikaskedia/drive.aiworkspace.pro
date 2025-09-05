@@ -110,6 +110,21 @@ const fetchWorkspaceById = async (workspaceId) => {
           }
           
           console.log('Processed workspace with default git_repo:', processedWorkspace)
+          
+          // Always save git_repo to localStorage for persistence using dedicated key
+          try {
+            const gitRepoKey = `workspace_git_repo_${processedWorkspace.id}`;
+            const gitRepoData = {
+              workspaceId: processedWorkspace.id,
+              git_repo: processedWorkspace.git_repo,
+              savedAt: new Date().toISOString()
+            };
+            localStorage.setItem(gitRepoKey, JSON.stringify(gitRepoData));
+            console.log('💾 Saved default git_repo to dedicated localStorage key in Files.vue:', gitRepoKey, 'value:', processedWorkspace.git_repo);
+          } catch (error) {
+            console.error('Error saving default git_repo to localStorage in Files.vue:', error);
+          }
+          
           workspaceStore.setCurrentWorkspace(processedWorkspace)
           return
         }
@@ -131,6 +146,21 @@ const fetchWorkspaceById = async (workspaceId) => {
         
         console.log('✅ Successfully fetched and processed workspace:', processedWorkspace)
         console.log('✅ git_repo value:', processedWorkspace.git_repo)
+        
+        // Always save git_repo to localStorage for persistence using dedicated key
+        try {
+          const gitRepoKey = `workspace_git_repo_${processedWorkspace.id}`;
+          const gitRepoData = {
+            workspaceId: processedWorkspace.id,
+            git_repo: processedWorkspace.git_repo,
+            savedAt: new Date().toISOString()
+          };
+          localStorage.setItem(gitRepoKey, JSON.stringify(gitRepoData));
+          console.log('💾 Saved git_repo to dedicated localStorage key in Files.vue:', gitRepoKey, 'value:', processedWorkspace.git_repo);
+        } catch (error) {
+          console.error('Error saving git_repo to localStorage in Files.vue:', error);
+        }
+        
         workspaceStore.setCurrentWorkspace(processedWorkspace)
       }
     } catch (fetchError) {
@@ -143,9 +173,8 @@ const fetchWorkspaceById = async (workspaceId) => {
 
 onMounted(async () => {
   console.log('Files.vue onMounted - route params:', route.params)
-  console.log('Files.vue onMounted - workspace_id:', route.params.workspace_id)
   
-  // Optimistic auth check - check multiple Supabase storage keys
+  // Check for cached auth first
   const authKeys = [
     'sb-aiworkspace-auth-token',
     'supabase.auth.token', 
@@ -170,9 +199,9 @@ onMounted(async () => {
     }
   }
   
-  // If no cached auth found, start with checking state
+  // If no cached auth found, check session
   if (!foundCachedAuth) {
-    isAuthenticated.value = null // Show minimal spinner
+    isAuthenticated.value = null
   }
   
   try {
@@ -181,19 +210,13 @@ onMounted(async () => {
       console.log('✅ User authenticated:', session.user.id)
       isAuthenticated.value = true
       
-      // If we have a workspace_id in the route, fetch it immediately
+      // Fetch workspace if we have workspace_id in route
       if (route.params.workspace_id) {
-        console.log('🚀 Fetching specific workspace immediately:', route.params.workspace_id)
         await fetchWorkspaceById(route.params.workspace_id)
-      } else {
-        console.log('No workspace_id in route params')
       }
       
-      // Load workspaces in background for the store (not blocking)
-      console.log('Loading workspaces in background...')
-      workspaceStore.loadWorkspaces().then(() => {
-        console.log('Workspaces loaded in background:', workspaceStore.workspaces.length)
-      }).catch(error => {
+      // Load workspaces in background
+      workspaceStore.loadWorkspaces().catch(error => {
         console.log('Background workspace loading failed:', error)
       })
       
@@ -209,21 +232,9 @@ onMounted(async () => {
 
 // Watch for route changes to handle workspace switching
 watch(() => route.params.workspace_id, async (newWorkspaceId, oldWorkspaceId) => {
-  console.log('🔄 Route watcher triggered:', { newWorkspaceId, oldWorkspaceId, isAuthenticated: isAuthenticated.value })
-  
   if (newWorkspaceId && newWorkspaceId !== oldWorkspaceId && isAuthenticated.value === true) {
     console.log('🚀 Workspace ID changed, fetching new workspace:', newWorkspaceId)
     await fetchWorkspaceById(newWorkspaceId)
-  } else if (newWorkspaceId && isAuthenticated.value === true) {
-    console.log('🔄 Same workspace ID, but ensuring workspace is loaded:', newWorkspaceId)
-    // Check if we already have this workspace loaded
-    const currentWorkspace = workspaceStore.currentWorkspace
-    if (!currentWorkspace || currentWorkspace.id.toString() !== newWorkspaceId) {
-      console.log('🔄 Workspace not loaded, fetching now:', newWorkspaceId)
-      await fetchWorkspaceById(newWorkspaceId)
-    } else {
-      console.log('✅ Workspace already loaded:', currentWorkspace)
-    }
   }
 })
 

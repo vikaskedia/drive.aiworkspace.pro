@@ -9,6 +9,7 @@
 
 <script>
 import { AIWorkspaceHeader } from '@aiworkspace/shared-header'
+import '@aiworkspace/shared-header/utils/universalCallback'
 
 export default {
   name: 'App',

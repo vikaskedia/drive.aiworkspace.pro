@@ -8,7 +8,8 @@
     <div v-else-if="isAuthenticated === false" class="login-required">
       <div class="login-inner">
         <strong>Authentication required.</strong>
-        <p>Please log in to access files.</p>
+        <p>Click on login/signup button in header to access this file.</p>
+        <p>If you already logged in, reload this page.</p>
       </div>
     </div>
     <!-- Show minimal loading indicator only during initial check (isAuthenticated === null) -->

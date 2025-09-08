@@ -9,7 +9,6 @@
       <div class="login-inner">
         <strong>Authentication required.</strong>
         <p>Please log in to access files.</p>
-        <a :href="loginUrl" class="login-link1" rel="noopener">Log in at login.aiworkspace.pro</a>
       </div>
     </div>
     <!-- Show minimal loading indicator only during initial check (isAuthenticated === null) -->
@@ -31,7 +30,7 @@ import { supabase } from '@aiworkspace/shared-header'
 const route = useRoute()
 const workspaceStore = useWorkspaceStore()
 const isAuthenticated = ref(null) // null = checking, true = auth, false = not auth
-const loginUrl = 'https://login.aiworkspace.pro'
+//const loginUrl = 'https://login.aiworkspace.pro'
 
 // Function to fetch workspace by ID
 const fetchWorkspaceById = async (workspaceId) => {

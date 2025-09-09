@@ -25,13 +25,13 @@
         </div-->
 
         <!-- Zoom Controls -->
-        <!--div class="zoom-controls">
+        <div class="zoom-controls">
           <el-button @click="zoomOut" size="small" :icon="ZoomOut">-</el-button>
           <span class="zoom-level">{{ Math.round(zoom * 100) }}%</span>
           <el-button @click="zoomIn" size="small" :icon="ZoomIn">+</el-button>
           <el-button @click="fitToWidth" size="small">Fit Width</el-button>
           <el-button @click="fitToPage" size="small">Fit Page</el-button>
-        </div-->
+        </div>
 
         <!-- Search Controls -->
         <div class="search-controls">
@@ -327,11 +327,26 @@ async function loadAllPages() {
       gap: 20px;
       padding: 20px;
       align-items: center;
+      min-height: 100%;
+      width: 100%;
+      box-sizing: border-box;
     `;
     
     // Load each page
     for (let pageNum = 1; pageNum <= totalPages.value; pageNum++) {
       console.log(`Loading page ${pageNum}/${totalPages.value}`);
+      
+      // Create a container for this page
+      const pageContainer = document.createElement('div');
+      pageContainer.className = 'page-container';
+      pageContainer.style.cssText = `
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        margin-bottom: 20px;
+        width: 100%;
+        box-sizing: border-box;
+      `;
       
       // Create canvas for this page
       const pageCanvas = document.createElement('canvas');
@@ -339,17 +354,37 @@ async function loadAllPages() {
       pageCanvas.style.cssText = `
         border: 1px solid #ddd;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        margin-bottom: 20px;
         background: white;
+        transform-origin: top center;
+        transition: transform 0.2s ease;
+        display: block;
       `;
       
-      // Render page to canvas
-      await mupdfService.renderPage(pageNum, pageCanvas, zoom.value);
+      // Render page to canvas at 1.0 zoom first
+      await mupdfService.renderPage(pageNum, pageCanvas, 1.0);
+      
+      // Store original dimensions
+      pageCanvas.setAttribute('data-original-width', pageCanvas.width);
+      pageCanvas.setAttribute('data-original-height', pageCanvas.height);
+      
+      // Apply current zoom
+      pageCanvas.style.transform = `scale(${zoom.value})`;
+      
+      // Set container size to accommodate scaled canvas with extra padding
+      const scaledWidth = pageCanvas.width * zoom.value;
+      const scaledHeight = pageCanvas.height * zoom.value;
+      pageContainer.style.width = `${scaledWidth}px`;
+      pageContainer.style.height = `${scaledHeight}px`;
+      pageContainer.style.minHeight = `${scaledHeight}px`;
+      
+      // Add canvas to page container
+      pageContainer.appendChild(pageCanvas);
       
       // Add page info
       const pageInfo = {
         number: pageNum,
         canvas: pageCanvas,
+        container: pageContainer,
         width: pageCanvas.width,
         height: pageCanvas.height
       };
@@ -357,8 +392,8 @@ async function loadAllPages() {
       allPages.value.push(pageInfo);
       pageCanvases.value.push(pageCanvas);
       
-      // Add canvas to container
-      pagesContainer.appendChild(pageCanvas);
+      // Add page container to main container
+      pagesContainer.appendChild(pageContainer);
       
       console.log(`Page ${pageNum} loaded successfully`);
     }
@@ -423,10 +458,10 @@ function previousPage() {
   if (currentPage.value > 1) {
     currentPage.value--;
     console.log('Page indicator updated to:', currentPage.value);
-    // Scroll to the previous page canvas
-    const pageCanvas = pageCanvases.value[currentPage.value - 1];
-    if (pageCanvas) {
-      pageCanvas.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Scroll to the previous page container
+    const pageInfo = allPages.value[currentPage.value - 1];
+    if (pageInfo && pageInfo.container) {
+      pageInfo.container.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }
 }
@@ -435,10 +470,10 @@ function nextPage() {
   if (currentPage.value < totalPages.value) {
     currentPage.value++;
     console.log('Page indicator updated to:', currentPage.value);
-    // Scroll to the next page canvas
-    const pageCanvas = pageCanvases.value[currentPage.value - 1];
-    if (pageCanvas) {
-      pageCanvas.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Scroll to the next page container
+    const pageInfo = allPages.value[currentPage.value - 1];
+    if (pageInfo && pageInfo.container) {
+      pageInfo.container.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }
 }
@@ -446,12 +481,12 @@ function nextPage() {
 // Zoom functions
 function zoomIn() {
   zoom.value = Math.min(zoom.value * 1.2, 5.0);
-  loadAllPages(); // Re-render all pages with new zoom
+  applyZoomToAllPages(); // Apply zoom to existing canvases
 }
 
 function zoomOut() {
   zoom.value = Math.max(zoom.value / 1.2, 0.1);
-  loadAllPages(); // Re-render all pages with new zoom
+  applyZoomToAllPages(); // Apply zoom to existing canvases
 }
 
 function fitToWidth() {
@@ -460,7 +495,7 @@ function fitToWidth() {
     // We'll need to get the original page width from MuPDF
     // For now, use a reasonable default
     zoom.value = containerWidth / 595; // Standard A4 width in points
-    loadAllPages(); // Re-render all pages with new zoom
+    applyZoomToAllPages(); // Apply zoom to existing canvases
   }
 }
 
@@ -475,8 +510,37 @@ function fitToPage() {
     const scaleX = containerWidth / pageWidth;
     const scaleY = containerHeight / pageHeight;
     zoom.value = Math.min(scaleX, scaleY);
-    loadAllPages(); // Re-render all pages with new zoom
+    applyZoomToAllPages(); // Apply zoom to existing canvases
   }
+}
+
+// Apply zoom to all existing page canvases without re-rendering
+function applyZoomToAllPages() {
+  if (pageCanvases.value.length === 0) return;
+  
+  console.log('Applying zoom to all pages:', zoom.value);
+  
+  pageCanvases.value.forEach((pageCanvas, index) => {
+    if (pageCanvas && pageCanvas.parentNode) {
+      // Apply CSS transform for smooth zooming from top center
+      pageCanvas.style.transform = `scale(${zoom.value})`;
+      pageCanvas.style.transformOrigin = 'top center';
+      
+      // Update page container size to accommodate the scaled canvas
+      const pageContainer = pageCanvas.parentNode;
+      if (pageContainer.classList.contains('page-container')) {
+        const originalWidth = pageCanvas.getAttribute('data-original-width') || pageCanvas.width;
+        const originalHeight = pageCanvas.getAttribute('data-original-height') || pageCanvas.height;
+        
+        // Update container size to match scaled canvas
+        const scaledWidth = originalWidth * zoom.value;
+        const scaledHeight = originalHeight * zoom.value;
+        pageContainer.style.width = `${scaledWidth}px`;
+        pageContainer.style.height = `${scaledHeight}px`;
+        pageContainer.style.minHeight = `${scaledHeight}px`;
+      }
+    }
+  });
 }
 
 // Search functions
@@ -560,32 +624,21 @@ function highlightSearchResults() {
       results.forEach(result => {
         const isActive = result.index === currentSearchResult.value;
         
-        // The coordinates from MuPDF are already in the correct scale
-        // No need for additional scaling since we're rendering at the right size
+        // The coordinates from MuPDF are at 1.0 zoom scale
+        // Since we render at 1.0 zoom and apply CSS transform, coordinates are correct
         const x = result.x;
         const y = result.y;
         const width = result.width;
         const height = result.height;
         
         // Set highlight color - make it more visible
-        ctx.fillStyle = isActive ? 'rgba(255, 255, 0, 0.2)' : 'rgba(255, 255, 0, 0.2)';
-        //ctx.strokeStyle = isActive ? '#ff0000' : '#ff6600';
-        //ctx.lineWidth = isActive ? 3 : 2;
+        ctx.fillStyle = isActive ? 'rgba(255, 255, 0, 0.3)' : 'rgba(255, 255, 0, 0.2)';
+        ctx.strokeStyle = isActive ? '#ff6600' : '#ffaa00';
+        ctx.lineWidth = isActive ? 2 : 1;
         
         // Draw highlight rectangle
         ctx.fillRect(x, y, width, height);
         ctx.strokeRect(x, y, width, height);
-        
-        // Add a small dot at the center for debugging
-        /*ctx.fillStyle = '#ff0000';
-        ctx.beginPath();
-        ctx.arc(x + width/2, y + height/2, 3, 0, 2 * Math.PI);
-        ctx.fill();
-        
-        console.log(`Highlighted result ${result.index} on page ${pageNum}:`, {
-          isActive,
-          coordinates: { x, y, width, height }
-        });*/
       });
     }
   });
@@ -599,8 +652,10 @@ function clearSearchHighlights() {
   pageCanvases.value.forEach((pageCanvas, index) => {
     if (pageCanvas) {
       const pageNum = index + 1;
-      // Re-render the page without highlights
-      mupdfService.renderPage(pageNum, pageCanvas, zoom.value);
+      // Re-render the page without highlights at 1.0 zoom
+      mupdfService.renderPage(pageNum, pageCanvas, 1.0);
+      // Re-apply current zoom
+      pageCanvas.style.transform = `scale(${zoom.value})`;
     }
   });
 }
@@ -630,13 +685,12 @@ function goToSearchResult(index) {
     
     // Scroll to the page containing this result
     if (pdfContainer.value) {
-      const container = pdfContainer.value;
       const pageIndex = result.page - 1;
-      const pageCanvas = pageCanvases.value[pageIndex];
+      const pageInfo = allPages.value[pageIndex];
       
-      if (pageCanvas) {
-        // Scroll to the page canvas
-        pageCanvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (pageInfo && pageInfo.container) {
+        // Scroll to the page container
+        pageInfo.container.scrollIntoView({ behavior: 'smooth', block: 'center' });
         
         // Update current page indicator
         currentPage.value = result.page;
@@ -1041,6 +1095,7 @@ onUnmounted(() => {
   justify-content: center;
   background: #e0e0e0;
   padding: 20px;
+  min-height: 0; /* Allow flex item to shrink */
 }
 
 .loading-overlay,
@@ -1091,6 +1146,40 @@ onUnmounted(() => {
   border: 1px solid #ddd; /* Add border for debugging */
   min-width: 100px;
   min-height: 100px;
+  transform-origin: top center;
+  transition: transform 0.2s ease;
+}
+
+.page-container {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  width: 100%;
+  box-sizing: border-box;
+  position: relative;
+  overflow: visible;
+}
+
+.page-canvas {
+  display: block;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: white;
+  border: 1px solid #ddd;
+  transform-origin: top center;
+  transition: transform 0.2s ease;
+}
+
+.all-pages-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+  align-items: center;
+  min-height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: visible;
 }
 
 .search-highlight {

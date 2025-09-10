@@ -1,5 +1,5 @@
 {
-  "name": "files.aiworkspace.pro",
+  "name": "drive.aiworkspace.pro",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -10,16 +10,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vikaskedia/files.aiworkspace.pro.git"
+    "url": "git+https://github.com/vikaskedia/drive.aiworkspace.pro.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/vikaskedia/files.aiworkspace.pro/issues"
+    "url": "https://github.com/vikaskedia/drive.aiworkspace.pro/issues"
   },
-  "homepage": "https://github.com/vikaskedia/files.aiworkspace.pro#readme",
+  "homepage": "https://github.com/vikaskedia/drive.aiworkspace.pro#readme",
   "dependencies": {
     "@aiworkspace/shared-header": "github:vikaskedia/header.aiworkspace.pro",
     "@element-plus/icons-vue": "^2.3.2",

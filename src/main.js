@@ -8,6 +8,13 @@ import router from './router'
 
 import './style.css'
 
+import { configureSupabase } from '@aiworkspace/shared-header'
+
+configureSupabase({
+  url: import.meta.env.VITE_SUPABASE_URL,
+  anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY
+})
+
 const app = createApp(App)
 const pinia = createPinia()
 

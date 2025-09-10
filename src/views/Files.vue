@@ -1,22 +1,22 @@
 <template>
   <div class="files-view">
-    <!-- Show content immediately if we think user is authenticated -->
-    <div v-if="isAuthenticated === true">
-      <FilesCt />
-    </div>
-    <!-- Only show login screen if explicitly not authenticated (not during checking) -->
-    <div v-else-if="isAuthenticated === false" class="login-required">
+    <!-- Not authenticated message (shown immediately before auth check completes) -->
+    <div v-if="!isAuthenticated && authCheckDone" class="login-required">
       <div class="login-inner">
         <strong>Authentication required.</strong>
         <p>Click on login/signup button in header to access this file.</p>
         <p>If you already logged in, reload this page.</p>
       </div>
     </div>
-    <!-- Show minimal loading indicator only during initial check (isAuthenticated === null) -->
-    <div v-else class="checking-auth">
+    <div v-else-if="!authCheckDone" class="checking-auth">
       <div class="checking-inner">
         <div class="spinner"></div>
       </div>
+    </div>
+
+    <!-- Files content only when authenticated -->
+    <div v-else>
+      <FilesCt />
     </div>
   </div>
 </template>
@@ -30,28 +30,63 @@ import { supabase } from '@aiworkspace/shared-header'
 
 const route = useRoute()
 const workspaceStore = useWorkspaceStore()
-const isAuthenticated = ref(null) // null = checking, true = auth, false = not auth
+const isAuthenticated = ref(false)
+const authCheckDone = ref(false)
 //const loginUrl = 'https://login.aiworkspace.pro'
 
 // Function to fetch workspace by ID
-const fetchWorkspaceById = async (workspaceId) => {
+const fetchWorkspaceById = async (workspaceId, retryCount = 0) => {
+  authCheckDone.value = false // reset before each load
+  if (!workspaceId) { 
+    authCheckDone.value = true
+    return
+  }
+  
   try {
     console.log('Fetching workspace by ID:', workspaceId)
+    
+    // Check if supabase client is properly initialized
+    if (!supabase || !supabase.auth) {
+      if (retryCount < 10) { // Max 10 retries
+        const delay = Math.min(100 * Math.pow(2, retryCount), 2000); // Exponential backoff, max 2s
+        console.warn(`Supabase client not ready, retrying in ${delay}ms... (attempt ${retryCount + 1}/10)`);
+        setTimeout(() => fetchWorkspaceById(workspaceId, retryCount + 1), delay);
+        return;
+      } else {
+        console.error('Supabase client failed to initialize after 10 attempts');
+        isAuthenticated.value = false;
+        authCheckDone.value = true;
+        return;
+      }
+    }
     
     // Validate workspace ID
     if (!workspaceId || isNaN(parseInt(workspaceId))) {
       console.error('Invalid workspace ID:', workspaceId)
+      isAuthenticated.value = false;
+      authCheckDone.value = true;
       return
     }
     
     const workspaceIdNum = parseInt(workspaceId)
     console.log('Parsed workspace ID:', workspaceIdNum)
     
+    // Check authentication first
+    const { data: { user: authUser } } = await supabase.auth.getUser()
+    if (!authUser) {
+      console.log('❌ No authenticated user found')
+      isAuthenticated.value = false;
+      authCheckDone.value = true;
+      return
+    }
+    isAuthenticated.value = true;
+    
     // First try to get from existing workspaces in store
     const existingWorkspace = workspaceStore.workspaces.find(w => w.id === workspaceIdNum)
     if (existingWorkspace && existingWorkspace.git_repo) {
       console.log('Found workspace in store with git_repo:', existingWorkspace)
       workspaceStore.setCurrentWorkspace(existingWorkspace)
+      authCheckDone.value = true;
       return
     }
     
@@ -59,11 +94,6 @@ const fetchWorkspaceById = async (workspaceId) => {
     console.log('Fetching workspace directly from Supabase...')
     
     try {
-      const { data: { user: authUser } } = await supabase.auth.getUser()
-      if (!authUser) {
-        console.error('No authenticated user found')
-        return
-      }
       
       console.log('Fetching workspace for user:', authUser.id)
       
@@ -169,70 +199,32 @@ const fetchWorkspaceById = async (workspaceId) => {
   } catch (error) {
     console.error('Error in fetchWorkspaceById:', error)
   }
+  
+  authCheckDone.value = true;
 }
 
 onMounted(async () => {
   console.log('Files.vue onMounted - route params:', route.params)
   
-  // Check for cached auth first
-  const authKeys = [
-    'sb-aiworkspace-auth-token',
-    'supabase.auth.token', 
-    'sb-aiworkspace-supabase-auth-token'
-  ]
+  // Wait a bit for the shared header to initialize supabase
+  await new Promise(resolve => setTimeout(resolve, 50));
   
-  let foundCachedAuth = false
-  for (const key of authKeys) {
-    const cachedAuth = localStorage.getItem(key)
-    if (cachedAuth) {
-      try {
-        const parsed = JSON.parse(cachedAuth)
-        if (parsed.access_token || parsed.user) {
-          console.log('⚡ Found cached auth, assuming authenticated')
-          isAuthenticated.value = true
-          foundCachedAuth = true
-          break
-        }
-      } catch (e) {
-        // Invalid JSON, continue checking other keys
-      }
-    }
+  // Fetch workspace if we have workspace_id in route
+  if (route.params.workspace_id) {
+    await fetchWorkspaceById(route.params.workspace_id)
   }
   
-  // If no cached auth found, check session
-  if (!foundCachedAuth) {
-    isAuthenticated.value = null
-  }
-  
-  try {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (session && session.user) {
-      console.log('✅ User authenticated:', session.user.id)
-      isAuthenticated.value = true
-      
-      // Fetch workspace if we have workspace_id in route
-      if (route.params.workspace_id) {
-        await fetchWorkspaceById(route.params.workspace_id)
-      }
-      
-      // Load workspaces in background
-      workspaceStore.loadWorkspaces().catch(error => {
-        console.log('Background workspace loading failed:', error)
-      })
-      
-    } else {
-      console.log('❌ No active session found')
-      isAuthenticated.value = false
-    }
-  } catch (e) {
-    console.error('Error checking Supabase session:', e)
-    isAuthenticated.value = false
+  // Load workspaces in background if authenticated
+  if (isAuthenticated.value) {
+    workspaceStore.loadWorkspaces().catch(error => {
+      console.log('Background workspace loading failed:', error)
+    })
   }
 })
 
 // Watch for route changes to handle workspace switching
 watch(() => route.params.workspace_id, async (newWorkspaceId, oldWorkspaceId) => {
-  if (newWorkspaceId && newWorkspaceId !== oldWorkspaceId && isAuthenticated.value === true) {
+  if (newWorkspaceId && newWorkspaceId !== oldWorkspaceId) {
     console.log('🚀 Workspace ID changed, fetching new workspace:', newWorkspaceId)
     await fetchWorkspaceById(newWorkspaceId)
   }

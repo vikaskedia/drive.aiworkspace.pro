@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Home from '../views/Home.vue'
 import Files from '../views/Files.vue'
 import AllWorkspaceFiles from '../views/AllWorkspaceFiles.vue'
+import SharedFolder from '../views/SharedFolder.vue'
 
 const routes = [
   {
@@ -19,6 +20,12 @@ const routes = [
     path: '/all-workspace/files',
     name: 'AllWorkspaceFiles',
     component: AllWorkspaceFiles,
+    props: true
+  },
+  {
+    path: '/shared-folder/:shareToken',
+    name: 'SharedFolder',
+    component: SharedFolder,
     props: true
   }
 ]

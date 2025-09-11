@@ -1,6 +1,26 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue';
-import { Plus, UploadFilled, Folder, FolderAdd, ArrowLeft, Download, MoreFilled, ArrowDown, Document, Picture, Tickets, ReadingLamp, Files, Close, Star, StarFilled } from '@element-plus/icons-vue';
+import { Plus, UploadFilled, Folder, FolderAdd, ArrowLeft, Download, MoreFilled, ArrowDown, Document, Picture, Tickets, ReadingLamp, Files, Close, Star, StarFilled, Share } from '@element-plus/icons-vue';
+
+// Props for shared view mode
+const props = defineProps({
+  workspaceId: {
+    type: [String, Number],
+    default: null
+  },
+  initialFolder: {
+    type: String,
+    default: null
+  },
+  isSharedView: {
+    type: Boolean,
+    default: false
+  },
+  shareToken: {
+    type: String,
+    default: null
+  }
+});
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useWorkspaceStore } from '../../store/workspace';
 import { storeToRefs } from 'pinia';
@@ -152,6 +172,19 @@ const searchLoading = ref(false);
 // Favorites functionality
 const favorites = ref([]);
 const favoritesDialogVisible = ref(false);
+
+// Folder sharing functionality
+const showShareDialog = ref(false);
+const shareForm = ref({
+  sharedWithDescription: '',
+  expiresAt: null,
+  expiresInDays: 10
+});
+const shareLink = ref('');
+const isCreatingShare = ref(false);
+const existingShares = ref([]);
+const isLoadingShares = ref(false);
+const showCreateForm = ref(false);
 
 // Split view functionality - matches old app behavior
 const splitPanes = ref([]);
@@ -570,9 +603,67 @@ async function navigateToFolderByPath(folderPath, updateUrl = true) {
 
 // Lifecycle hooks
 onMounted(async () => {
-  console.log('FilesCt onMounted - currentWorkspace:', currentWorkspace.value)
+  console.log('FilesCt onMounted - currentWorkspace:', currentWorkspace.value, 'isSharedView:', props.isSharedView)
   
-  // Always save git_repo to localStorage on mount if available using dedicated key
+  // Handle shared view mode
+  if (props.isSharedView && props.workspaceId) {
+    console.log('🔗 Initializing shared view mode for workspace:', props.workspaceId, 'initialFolder:', props.initialFolder)
+    
+    // Load workspace for shared view
+    try {
+      const { data: workspace, error } = await supabase
+        .from('workspaces')
+        .select('id, title, description, git_repo')
+        .eq('id', props.workspaceId)
+        .single()
+      
+      if (error) {
+        console.error('Error loading workspace for shared view:', error)
+        ElMessage.error('Error loading shared folder')
+        return
+      }
+      
+      console.log('✅ Workspace loaded for shared view:', workspace)
+      
+      // Set the workspace in the store
+      workspaceStore.setCurrentWorkspace(workspace)
+      
+      // Wait a bit for the workspace to be properly set
+      await nextTick()
+      
+      // Verify workspace is set
+      if (!currentWorkspace.value?.git_repo) {
+        console.error('❌ Workspace not properly set after store update')
+        ElMessage.error('Error loading workspace')
+        return
+      }
+      
+      console.log('✅ Workspace verified:', currentWorkspace.value)
+      
+      // Navigate to the initial folder if specified
+      if (props.initialFolder) {
+        console.log('🔗 Navigating to initial folder:', props.initialFolder)
+        await navigateToFolderByPath(props.initialFolder, false)
+        // Load contents for the specific folder
+        console.log('🔗 Loading contents for shared folder:', props.initialFolder)
+        await loadContents()
+      } else {
+        console.log('🔗 No initial folder specified, staying at root')
+        currentFolder.value = null
+        folderBreadcrumbs.value = []
+        // Load contents for root
+        console.log('🔗 Loading contents for shared view root')
+        await loadContents()
+      }
+      
+    } catch (error) {
+      console.error('Error initializing shared view:', error)
+      ElMessage.error('Error loading shared folder')
+    }
+    return
+  }
+  
+  // Regular mode - Always save git_repo to localStorage on mount if available using dedicated key
   if (currentWorkspace.value?.git_repo) {
     try {
       const gitRepoKey = `workspace_git_repo_${currentWorkspace.value.id}`;
@@ -682,10 +773,17 @@ window.fetch = function(...args) {
 
 // Load files and folders from Gitea (simplified)
 async function loadContents(forceRefresh = false) {
-  console.log('loadContents called for path:', currentFolder.value?.path || 'root', 'forceRefresh:', forceRefresh);
+  console.log('loadContents called for path:', currentFolder.value?.path || 'root', 'forceRefresh:', forceRefresh, 'isSharedView:', props.isSharedView);
   
   // Try to get workspace with git_repo, with multiple fallback attempts
   let workspace = workspaceWithGitRepo.value;
+  
+  console.log('🔍 loadContents workspace check:', {
+    workspace: workspace,
+    hasGitRepo: workspace?.git_repo,
+    currentWorkspace: currentWorkspace.value,
+    isSharedView: props.isSharedView
+  });
   
   // If still no git_repo, try to restore from localStorage directly
   if (!workspace?.git_repo) {
@@ -719,8 +817,8 @@ async function loadContents(forceRefresh = false) {
   const path = currentFolder.value?.path || '';
   const repoName = workspace.git_repo;
   
-  // Cancel previous request if different path
-  if (activeRequests.value.loadContents && lastRequestedPaths.value.loadContents !== path) {
+  // Cancel previous request if different path (but not in shared view initialization)
+  if (activeRequests.value.loadContents && lastRequestedPaths.value.loadContents !== path && !props.isSharedView) {
     console.log('🔄 Cancelling previous request for different path:', lastRequestedPaths.value.loadContents, '->', path);
     activeRequests.value.loadContents.abort();
   } else if (activeRequests.value.loadContents && lastRequestedPaths.value.loadContents === path) {
@@ -1356,10 +1454,272 @@ async function createUniverDocument() {
   }
 }
 
+// Create folder share
+async function createFolderShare() {
+  if (!currentWorkspace.value || isCreatingShare.value) return;
+  
+  try {
+    isCreatingShare.value = true;
+    
+    // Get current user
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (!authUser) {
+      ElMessage.error('You must be logged in to create a share');
+      return;
+    }
+    
+    // Calculate expiry date
+    let expiresAt = null;
+    if (shareForm.value.expiresInDays && shareForm.value.expiresInDays !== 'never' && shareForm.value.expiresInDays > 0) {
+      const expiryDate = new Date();
+      expiryDate.setDate(expiryDate.getDate() + shareForm.value.expiresInDays);
+      expiresAt = expiryDate.toISOString();
+    }
+    
+    // Generate share token first
+    const { data: tokenData, error: tokenError } = await supabase.rpc('generate_share_token');
+    if (tokenError) {
+      throw tokenError;
+    }
+    
+    // Create the share record with generated token
+    const { data: shareData, error } = await supabase
+      .from('folder_shares')
+      .insert({
+        workspace_id: currentWorkspace.value.id,
+        folder_path: currentFolder.value?.path || '',
+        share_token: tokenData,
+        shared_by: authUser.id,
+        shared_with_description: shareForm.value.sharedWithDescription || null,
+        expires_at: expiresAt
+      })
+      .select('share_token')
+      .single();
+    
+    if (error) {
+      throw error;
+    }
+    
+    // Generate the shareable link
+    const baseUrl = window.location.origin;
+    const shareUrl = `${baseUrl}/shared-folder/${shareData.share_token}`;
+    shareLink.value = shareUrl;
+    
+    ElMessage.success('Folder share created successfully!');
+    
+    // Reload existing shares to include the new one
+    await loadExistingShares();
+    
+  } catch (error) {
+    console.error('Error creating folder share:', error);
+    ElMessage.error('Error creating folder share: ' + error.message);
+  } finally {
+    isCreatingShare.value = false;
+  }
+}
+
+// Copy share link to clipboard
+async function copyShareLink() {
+  try {
+    await navigator.clipboard.writeText(shareLink.value);
+    ElMessage.success('Share link copied to clipboard!');
+  } catch (error) {
+    console.error('Error copying to clipboard:', error);
+    ElMessage.error('Failed to copy link to clipboard');
+  }
+}
+
+// Reset share form
+function resetShareForm() {
+  shareForm.value = {
+    sharedWithDescription: '',
+    expiresAt: null,
+    expiresInDays: 10
+  };
+  shareLink.value = '';
+  showCreateForm.value = false;
+}
+
+// Load existing shares for the current folder
+async function loadExistingShares() {
+  if (!currentWorkspace.value) return;
+  
+  try {
+    isLoadingShares.value = true;
+    
+    const { data: shares, error } = await supabase
+      .from('folder_shares')
+      .select(`
+        id,
+        share_token,
+        shared_with_description,
+        expires_at,
+        created_at,
+        is_active,
+        access_count,
+        last_accessed_at
+      `)
+      .eq('workspace_id', currentWorkspace.value.id)
+      .eq('folder_path', currentFolder.value?.path || '')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error('Error loading existing shares:', error);
+      return;
+    }
+    
+    existingShares.value = shares || [];
+    
+  } catch (error) {
+    console.error('Error loading existing shares:', error);
+  } finally {
+    isLoadingShares.value = false;
+  }
+}
+
+// Open share dialog and load existing shares
+async function openShareDialog() {
+  showShareDialog.value = true;
+  await loadExistingShares();
+}
+
+// Copy existing share link
+async function copyExistingShareLink(shareToken) {
+  try {
+    const baseUrl = window.location.origin;
+    const shareUrl = `${baseUrl}/shared-folder/${shareToken}`;
+    await navigator.clipboard.writeText(shareUrl);
+    ElMessage.success('Share link copied to clipboard!');
+  } catch (error) {
+    console.error('Error copying to clipboard:', error);
+    ElMessage.error('Failed to copy link to clipboard');
+  }
+}
+
+// Deactivate a share
+async function deactivateShare(shareId) {
+  try {
+    const { error } = await supabase
+      .from('folder_shares')
+      .update({ is_active: false })
+      .eq('id', shareId);
+    
+    if (error) {
+      throw error;
+    }
+    
+    ElMessage.success('Share link deactivated');
+    await loadExistingShares(); // Reload the list
+    
+  } catch (error) {
+    console.error('Error deactivating share:', error);
+    ElMessage.error('Error deactivating share: ' + error.message);
+  }
+}
+
+// Format date for display
+function formatShareDate(dateString) {
+  if (!dateString) return 'Never';
+  const date = new Date(dateString);
+  return date.toLocaleDateString() + ' at ' + date.toLocaleTimeString();
+}
+
+// Navigate to shared folder root (for shared view)
+async function navigateToSharedRoot() {
+  if (!props.initialFolder) {
+    return;
+  }
+  
+  console.log('Navigating to shared folder root:', props.initialFolder);
+  
+  // Set navigation flag
+  isNavigating.value = true;
+  
+  try {
+    // Navigate to the shared folder
+    await navigateToFolderByPath(props.initialFolder, false);
+    
+    // Load contents
+    await loadContents();
+    
+  } catch (error) {
+    console.error('Error navigating to shared root:', error);
+    ElMessage.error('Error navigating to shared folder: ' + error.message);
+  } finally {
+    // Reset navigation flag
+    setTimeout(() => {
+      isNavigating.value = false;
+    }, 200);
+  }
+}
+
+// Get shared folder name from path
+function getSharedFolderName() {
+  if (!props.initialFolder) {
+    return 'Shared Folder';
+  }
+  
+  const pathParts = props.initialFolder.split('/').filter(part => part.trim() !== '');
+  return pathParts[pathParts.length - 1] || 'Shared Folder';
+}
+
+// Get breadcrumbs for display (filter out shared folder path in shared view)
+function getDisplayBreadcrumbs() {
+  if (!props.isSharedView || !props.initialFolder) {
+    return folderBreadcrumbs.value;
+  }
+  
+  // In shared view, we want to show only the subfolders within the shared folder
+  // The shared folder itself should be the "root" in the breadcrumb
+  const sharedFolderPath = props.initialFolder;
+  
+  // If we're at the shared folder root, show no breadcrumbs
+  if (!currentFolder.value || currentFolder.value.path === sharedFolderPath) {
+    return [];
+  }
+  
+  // If we're in a subfolder of the shared folder, show only the path relative to the shared folder
+  if (currentFolder.value.path.startsWith(sharedFolderPath)) {
+    const relativePath = currentFolder.value.path.substring(sharedFolderPath.length);
+    const relativePathParts = relativePath.split('/').filter(part => part.trim() !== '');
+    
+    // Build breadcrumbs for the relative path
+    const relativeBreadcrumbs = [];
+    let currentRelativePath = '';
+    
+    for (const part of relativePathParts) {
+      currentRelativePath += (currentRelativePath ? '/' : '') + part;
+      relativeBreadcrumbs.push({
+        name: part,
+        path: currentRelativePath
+      });
+    }
+    
+    return relativeBreadcrumbs;
+  }
+  
+  // Fallback: filter out the shared folder name
+  const sharedFolderName = getSharedFolderName();
+  return folderBreadcrumbs.value.filter(crumb => crumb.name !== sharedFolderName);
+}
+
 // Navigate to folder
 async function navigateToFolder(folder, fromUserAction = true) {
   try {
     console.log('Navigating to folder:', folder.name, 'path:', folder.path);
+    
+    // Check shared view restrictions
+    if (props.isSharedView && props.initialFolder) {
+      const sharedFolderPath = props.initialFolder;
+      const targetPath = folder.path;
+      
+      // Allow navigation only within the shared folder and its subfolders
+      if (sharedFolderPath && !targetPath.startsWith(sharedFolderPath) && targetPath !== '') {
+        ElMessage.warning('You can only access folders within the shared folder');
+        return;
+      }
+    }
     
     // Try to get workspace with git_repo, with multiple fallback attempts
     let workspace = workspaceWithGitRepo.value;
@@ -1786,9 +2146,34 @@ function getGiteaHeaders(token) {
   }
 }*/
 
+// Handle root breadcrumb click
+function handleRootClick() {
+  console.log('🟢 Root breadcrumb clicked! isNavigating:', isNavigating.value, 'isSharedView:', props.isSharedView);
+  
+  if (isNavigating.value) {
+    console.log('⚠️ Navigation in progress, ignoring click');
+    return;
+  }
+  
+  if (props.isSharedView) {
+    console.log('🔄 Calling navigateToSharedRoot');
+    navigateToSharedRoot();
+  } else {
+    console.log('🔄 Calling navigateToRoot');
+    navigateToRoot();
+  }
+}
+
 // Navigate to root directory
 async function navigateToRoot() {
-  console.log('Navigating to root');
+  console.log('🔵 navigateToRoot called - isNavigating:', isNavigating.value, 'isSharedView:', props.isSharedView);
+  
+  // Check shared view restrictions
+  if (props.isSharedView && props.initialFolder) {
+    console.log('❌ Blocked by shared view restrictions');
+    ElMessage.warning('You can only access folders within the shared folder');
+    return;
+  }
   
   // Set navigation flag to prevent route watcher from triggering
   isNavigating.value = true;
@@ -1818,6 +2203,33 @@ async function navigateToRoot() {
   }
 }
 
+// Navigate to relative breadcrumb in shared view
+async function navigateToRelativeBreadcrumb(relativeIndex) {
+  if (!props.isSharedView || !props.initialFolder) {
+    return navigateToBreadcrumb(relativeIndex);
+  }
+  
+  console.log('Navigating to relative breadcrumb index:', relativeIndex);
+  
+  const sharedFolderPath = props.initialFolder;
+  const displayBreadcrumbs = getDisplayBreadcrumbs();
+  
+  if (relativeIndex < 0 || relativeIndex >= displayBreadcrumbs.length) {
+    console.error('Invalid relative breadcrumb index:', relativeIndex);
+    return;
+  }
+  
+  // Build the full path by combining shared folder path with relative path
+  const targetRelativePath = displayBreadcrumbs[relativeIndex].path;
+  const fullPath = sharedFolderPath + '/' + targetRelativePath;
+  
+  console.log('Navigating to full path:', fullPath);
+  
+  // Navigate to the folder using the full path
+  await navigateToFolderByPath(fullPath, false);
+  await loadContents();
+}
+
 // Navigate to specific breadcrumb folder
 async function navigateToBreadcrumb(breadcrumbIndex) {
   console.log('Navigating to breadcrumb index:', breadcrumbIndex);
@@ -1825,6 +2237,18 @@ async function navigateToBreadcrumb(breadcrumbIndex) {
   if (breadcrumbIndex < 0 || breadcrumbIndex >= folderBreadcrumbs.value.length) {
     console.error('Invalid breadcrumb index:', breadcrumbIndex);
     return;
+  }
+  
+  // Check shared view restrictions for breadcrumb navigation
+  if (props.isSharedView && props.initialFolder) {
+    const sharedFolderPath = props.initialFolder;
+    const targetBreadcrumb = folderBreadcrumbs.value[breadcrumbIndex];
+    
+    // Allow navigation only within the shared folder and its subfolders
+    if (sharedFolderPath && !targetBreadcrumb.path.startsWith(sharedFolderPath) && targetBreadcrumb.path !== '') {
+      ElMessage.warning('You can only access folders within the shared folder');
+      return;
+    }
   }
   
   // Set navigation flag to prevent route watcher from triggering
@@ -2735,24 +3159,24 @@ function removeFavorite(favorite) {
                 /-->
                 
                 <!-- Breadcrumb Navigation -->
-                <el-breadcrumb separator="/" v-if="folderBreadcrumbs.length > 0">
+                <el-breadcrumb separator="/">
                   <el-breadcrumb-item>
                     <span
-                      @click="navigateToRoot"
+                      @click="handleRootClick"
                       class="breadcrumb-link"
                       :class="{ disabled: isNavigating }"
                       style="cursor: pointer;"
                     >
-                      Root
+                      {{ isSharedView ? (initialFolder ? getSharedFolderName() : 'Shared Folder') : 'Root' }}
                     </span>
                   </el-breadcrumb-item>
                   <el-breadcrumb-item 
-                    v-for="(crumb, index) in folderBreadcrumbs" 
+                    v-for="(crumb, index) in getDisplayBreadcrumbs()" 
                     :key="index"
                   >
                     <span
-                      v-if="index < folderBreadcrumbs.length - 1"
-                      @click="navigateToBreadcrumb(index)"
+                      v-if="index < getDisplayBreadcrumbs().length - 1"
+                      @click="navigateToRelativeBreadcrumb(index)"
                       class="breadcrumb-link"
                       :class="{ disabled: isNavigating }"
                       style="cursor: pointer;"
@@ -2767,12 +3191,6 @@ function removeFavorite(favorite) {
                     </span>
                   </el-breadcrumb-item>
                 </el-breadcrumb>
-                <h2 v-else>
-                  Root
-                  <!--el-tooltip content="This URL is shareable - you can copy it to share this folder with others">
-                    <span class="shareable-indicator">🔗</span>
-                  </el-tooltip-->
-                </h2>
               </div>
             </div>
 
@@ -2784,6 +3202,18 @@ function removeFavorite(favorite) {
                   📅 Last updated: {{ formattedLastFetchTime }}
                 </el-text>
               </div>
+
+              <!-- Give View Access Button (hidden in shared view) -->
+              <el-button 
+                v-if="!isSharedView"
+                @click="openShareDialog"
+                type="success"
+                size="small"
+                :icon="Share"
+                title="Share this folder with a link"
+              >
+                Give view access
+              </el-button>
 
               <!-- Filters Toggle -->
               <el-badge :value="activeFiltersCount" :hidden="activeFiltersCount === 0" type="primary">
@@ -2808,8 +3238,8 @@ function removeFavorite(favorite) {
                 </el-button>
               </el-badge>
 
-              <!-- Actions Dropdown -->
-              <el-dropdown trigger="click">
+              <!-- Actions Dropdown (hidden in shared view) -->
+              <el-dropdown v-if="!isSharedView" trigger="click">
                 <el-button type="primary" :icon="Plus" size="small">
                   New <el-icon><ArrowDown /></el-icon>
                 </el-button>
@@ -3184,6 +3614,196 @@ function removeFavorite(favorite) {
         <el-button type="primary" @click="createUniverDocument" :disabled="!newDocName.trim()">
           Create
         </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Folder Sharing Dialog -->
+    <el-dialog v-model="showShareDialog" title="Share Folder" width="800px" @close="resetShareForm">
+      <div v-if="!shareLink && !showCreateForm">
+        <!-- Existing Shares Section -->
+        <div class="existing-shares-section">
+          <div class="section-header">
+            <h3>Existing Share Links</h3>
+            <el-button 
+              type="primary" 
+              size="small"
+              @click="showCreateForm = true"
+              :icon="Plus"
+            >
+              Create New Share
+            </el-button>
+          </div>
+          
+          <div v-if="isLoadingShares" class="loading-shares">
+            <el-skeleton :rows="3" animated />
+          </div>
+          
+          <div v-else-if="existingShares.length === 0" class="no-shares">
+            <el-empty description="No share links created yet">
+              <template #image>
+                <el-icon size="60" color="#c0c4cc">
+                  <Share />
+                </el-icon>
+              </template>
+              <el-button type="primary" @click="showCreateForm = true">
+                Create First Share Link
+              </el-button>
+            </el-empty>
+          </div>
+          
+          <div v-else class="shares-list">
+            <el-table :data="existingShares" size="small" max-height="300">
+              <el-table-column prop="shared_with_description" label="Shared With" min-width="200">
+                <template #default="{ row }">
+                  <span v-if="row.shared_with_description">{{ row.shared_with_description }}</span>
+                  <span v-else class="text-muted">No description</span>
+                </template>
+              </el-table-column>
+              
+              <el-table-column prop="expires_at" label="Expires" width="150">
+                <template #default="{ row }">
+                  <span v-if="row.expires_at">
+                    {{ formatShareDate(row.expires_at) }}
+                  </span>
+                  <span v-else class="text-success">Never</span>
+                </template>
+              </el-table-column>
+              
+              <el-table-column prop="access_count" label="Access Count" width="100" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small" type="info">{{ row.access_count }}</el-tag>
+                </template>
+              </el-table-column>
+              
+              <el-table-column prop="created_at" label="Created" width="120">
+                <template #default="{ row }">
+                  {{ new Date(row.created_at).toLocaleDateString() }}
+                </template>
+              </el-table-column>
+              
+              <el-table-column label="Actions" width="120" align="right">
+                <template #default="{ row }">
+                  <div class="share-actions">
+                    <el-button 
+                      @click="copyExistingShareLink(row.share_token)"
+                      size="small"
+                      type="primary"
+                      text
+                      :icon="Share"
+                      title="Copy link"
+                    />
+                    <el-button 
+                      @click="deactivateShare(row.id)"
+                      size="small"
+                      type="danger"
+                      text
+                      :icon="Close"
+                      title="Deactivate"
+                    />
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Create New Share Form -->
+      <div v-else-if="showCreateForm && !shareLink">
+        <div class="create-share-header">
+          <el-button 
+            @click="showCreateForm = false"
+            size="small"
+            :icon="ArrowLeft"
+            text
+          >
+            Back to existing shares
+          </el-button>
+        </div>
+        
+        <el-form :model="shareForm" label-width="140px">
+          <el-form-item label="Who is this link being shared with?">
+            <el-input 
+              v-model="shareForm.sharedWithDescription" 
+              placeholder="e.g., Going to share with Roger and Stephanie"
+              type="textarea"
+              :rows="2"
+            />
+          </el-form-item>
+          
+          <el-form-item label="Expires in">
+            <el-select v-model="shareForm.expiresInDays" placeholder="Select expiry">
+              <el-option label="1 day" :value="1" />
+              <el-option label="3 days" :value="3" />
+              <el-option label="7 days" :value="7" />
+              <el-option label="10 days" :value="10" />
+              <el-option label="30 days" :value="30" />
+              <el-option label="Never" value="never" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </div>
+      
+      <!-- Share Success -->
+      <div v-else-if="shareLink" class="share-success">
+        <el-alert
+          title="Share link created successfully!"
+          type="success"
+          :closable="false"
+          show-icon
+        />
+        
+        <div class="share-link-container">
+          <label class="share-link-label">Shareable link:</label>
+          <div class="share-link-input">
+            <el-input 
+              :model-value="shareLink" 
+              readonly 
+              class="share-link-field"
+            />
+            <el-button 
+              @click="copyShareLink"
+              type="primary"
+              :icon="Share"
+            >
+              Copy
+            </el-button>
+          </div>
+        </div>
+        
+        <div class="share-info">
+          <p><strong>Folder:</strong> {{ currentFolder?.name || 'Root' }}</p>
+          <p v-if="shareForm.sharedWithDescription">
+            <strong>Shared with:</strong> {{ shareForm.sharedWithDescription }}
+          </p>
+          <p v-if="shareForm.expiresInDays && shareForm.expiresInDays !== 'never'">
+            <strong>Expires:</strong> {{ shareForm.expiresInDays }} day(s) from now
+          </p>
+          <p v-else>
+            <strong>Expires:</strong> Never
+          </p>
+        </div>
+      </div>
+      
+      <template #footer>
+        <div v-if="!shareLink && !showCreateForm">
+          <el-button @click="showShareDialog = false">Close</el-button>
+        </div>
+        <div v-else-if="showCreateForm && !shareLink">
+          <el-button @click="showCreateForm = false">Cancel</el-button>
+          <el-button 
+            type="primary" 
+            @click="createFolderShare"
+            :loading="isCreatingShare"
+            :disabled="isCreatingShare"
+          >
+            Create Share Link
+          </el-button>
+        </div>
+        <div v-else-if="shareLink">
+          <el-button @click="showShareDialog = false">Close</el-button>
+          <el-button type="primary" @click="resetShareForm">Create Another</el-button>
+        </div>
       </template>
     </el-dialog>
 
@@ -3770,5 +4390,113 @@ function removeFavorite(favorite) {
   display: flex;
   gap: 4px;
   align-items: center;
+}
+
+/* Folder sharing dialog styles */
+.share-success {
+  margin-top: 16px;
+}
+
+.share-link-container {
+  margin: 20px 0;
+}
+
+.share-link-label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: #303133;
+}
+
+.share-link-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.share-link-field {
+  flex: 1;
+}
+
+.share-link-field .el-input__inner {
+  font-family: monospace;
+  font-size: 0.9rem;
+  background-color: #f5f7fa;
+}
+
+.share-info {
+  margin-top: 16px;
+  padding: 16px;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+  border: 1px solid #e4e7ed;
+}
+
+.share-info p {
+  margin: 8px 0;
+  color: #606266;
+}
+
+.share-info p:first-child {
+  margin-top: 0;
+}
+
+.share-info p:last-child {
+  margin-bottom: 0;
+}
+
+/* Existing shares section styles */
+.existing-shares-section {
+  margin-bottom: 20px;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.section-header h3 {
+  margin: 0;
+  color: #303133;
+  font-size: 16px;
+}
+
+.loading-shares {
+  padding: 20px 0;
+}
+
+.no-shares {
+  padding: 40px 0;
+  text-align: center;
+}
+
+.shares-list {
+  margin-top: 16px;
+}
+
+.share-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.text-muted {
+  color: #909399;
+  font-style: italic;
+}
+
+.text-success {
+  color: #67c23a;
+  font-weight: 500;
+}
+
+.create-share-header {
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e4e7ed;
 }
 </style>

@@ -3216,7 +3216,7 @@ function removeFavorite(favorite) {
               </el-button>
 
               <!-- Filters Toggle -->
-              <el-badge :value="activeFiltersCount" :hidden="activeFiltersCount === 0" type="primary">
+              <el-badge :value="activeFiltersCount" :hidden="activeFiltersCount === 0" type="primary" v-if="!isSharedView">
                 <el-button 
                   @click="filters.showFilters = !filters.showFilters"
                   :type="filters.showFilters ? 'primary' : 'default'"

@@ -3436,7 +3436,7 @@ function removeFavorite(favorite) {
                           <el-icon><Download /></el-icon>
                           Download Folder (ZIP)
                         </el-dropdown-item>
-                        <el-dropdown-item v-if="row.type !== 'dir'" @click="deleteFile(row)" class="danger">
+                        <el-dropdown-item v-if="row.type !== 'dir' && !isSharedView" @click="deleteFile(row)" class="danger">
                           Delete
                         </el-dropdown-item>
                       </el-dropdown-menu>

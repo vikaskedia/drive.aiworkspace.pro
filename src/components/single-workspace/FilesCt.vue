@@ -151,8 +151,13 @@ watch(isWorkspaceReady, async (ready) => {
     updateLastFetchTime()
     
     // Ensure content is loaded when workspace becomes ready
-    console.log('🚀 Workspace ready, ensuring content is loaded...');
-    await loadContents();
+    // But skip this in shared view mode since shared view handles its own content loading
+    if (!props.isSharedView) {
+      console.log('🚀 Workspace ready, ensuring content is loaded...');
+      await loadContents();
+    } else {
+      console.log('🚀 Workspace ready, but skipping loadContents in shared view mode');
+    }
   }
 })
 
@@ -365,6 +370,12 @@ watch(currentWorkspace, async (newWorkspace, oldWorkspace) => {
     return;
   }
   
+  // Skip if in shared view mode - shared view handles its own initialization
+  if (props.isSharedView) {
+    console.log('🚫 Skipping workspace watcher in shared view mode');
+    return;
+  }
+  
   console.log('Workspace changed in FilesCt:', { newWorkspace, oldWorkspace })
   
   // If new workspace exists but has no git_repo, try to preserve it from old workspace
@@ -419,27 +430,29 @@ watch(currentWorkspace, async (newWorkspace, oldWorkspace) => {
     // Initialize from URL
     await initializeFromUrl();
     
-    // Ensure content is loaded if not already loaded
-    if (files.value.length === 0 && folders.value.length === 0 && !loading.value) {
+    // Ensure content is loaded if not already loaded (but skip in shared view mode)
+    if (!props.isSharedView && files.value.length === 0 && folders.value.length === 0 && !loading.value) {
       console.log('🔄 No content loaded after initialization, triggering loadContents...');
       await loadContents();
     }
     
-    // Fallback: If no content was loaded after a delay, try to load again
-    setTimeout(() => {
-      if (loading.value && files.value.length === 0 && folders.value.length === 0) {
-        console.log('⚠️ Fallback: No content loaded after delay, attempting fresh load...');
-        loadContents(true); // Force refresh
-      }
-    }, 3000); // 3 second fallback
-    
-    // Additional safety net: Force content load after 5 seconds if still no content
-    setTimeout(() => {
-      if (files.value.length === 0 && folders.value.length === 0 && newWorkspace?.git_repo) {
-        console.log('🚨 Safety net: Still no content after 5 seconds, forcing load...');
-        loadContents(true); // Force refresh
-      }
-    }, 5000); // 5 second safety net
+    // Fallback: If no content was loaded after a delay, try to load again (but skip in shared view mode)
+    if (!props.isSharedView) {
+      setTimeout(() => {
+        if (loading.value && files.value.length === 0 && folders.value.length === 0) {
+          console.log('⚠️ Fallback: No content loaded after delay, attempting fresh load...');
+          loadContents(true); // Force refresh
+        }
+      }, 3000); // 3 second fallback
+      
+      // Additional safety net: Force content load after 5 seconds if still no content
+      setTimeout(() => {
+        if (files.value.length === 0 && folders.value.length === 0 && newWorkspace?.git_repo) {
+          console.log('🚨 Safety net: Still no content after 5 seconds, forcing load...');
+          loadContents(true); // Force refresh
+        }
+      }, 5000); // 5 second safety net
+    }
   }
 }, { immediate: true });
 
@@ -474,8 +487,10 @@ watch(() => route.query, async (newQuery, oldQuery) => {
       selectedFile.value = null;
     }
     
-    // Load contents for the new folder
-    await loadContents();
+    // Load contents for the new folder (but skip in shared view mode)
+    if (!props.isSharedView) {
+      await loadContents();
+    }
   }
 }, { deep: true });
 
@@ -512,8 +527,10 @@ async function initializeFromUrl() {
       folderBreadcrumbs.value = [];
     }
     
-    // Load files and folders for current path
-    await loadContents();
+    // Load files and folders for current path (but skip in shared view mode)
+    if (!props.isSharedView) {
+      await loadContents();
+    }
     
     // Handle file selection after contents are loaded
     if (fileParam) {
@@ -773,7 +790,7 @@ window.fetch = function(...args) {
 
 // Load files and folders from Gitea (simplified)
 async function loadContents(forceRefresh = false) {
-  console.log('loadContents called for path:', currentFolder.value?.path || 'root', 'forceRefresh:', forceRefresh, 'isSharedView:', props.isSharedView);
+  console.log('🔍 loadContents called for path:', currentFolder.value?.path || 'root', 'forceRefresh:', forceRefresh, 'isSharedView:', props.isSharedView);
   
   // Try to get workspace with git_repo, with multiple fallback attempts
   let workspace = workspaceWithGitRepo.value;

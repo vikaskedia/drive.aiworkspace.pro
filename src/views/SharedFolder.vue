@@ -53,13 +53,15 @@
         :initial-folder="shareInfo.folder_path"
         :is-shared-view="true"
         :share-token="shareToken"
+        :on-file-view="trackFileView"
+        :on-folder-navigation="trackFolderNavigation"
       />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Folder } from '@element-plus/icons-vue'
@@ -77,6 +79,10 @@ const route = useRoute()
 const loading = ref(true)
 const error = ref(null)
 const shareInfo = ref(null)
+const accessLogId = ref(null)
+const sessionStartTime = ref(null)
+const filesViewed = ref(0)
+const foldersNavigated = ref(0)
 
 const errorIcon = computed(() => {
   if (error.value?.type === 'expired') return 'warning'
@@ -143,8 +149,25 @@ async function loadShareInfo(retryCount = 0) {
       return
     }
 
-    // Increment access count
-    await supabase.rpc('increment_share_access', { share_token_param: props.shareToken })
+    // Log detailed access with IP address
+    const ipAddress = await getClientIPAddress()
+    const userAgent = navigator.userAgent
+    
+    const { data: logId, error: logError } = await supabase.rpc('log_share_access', {
+      share_token_param: props.shareToken,
+      ip_address_param: ipAddress,
+      user_agent_param: userAgent
+    })
+    
+    if (logError) {
+      console.error('Error logging share access:', logError)
+      // Fallback to old method if new logging fails
+      await supabase.rpc('increment_share_access', { share_token_param: props.shareToken })
+    } else {
+      accessLogId.value = logId
+      sessionStartTime.value = Date.now()
+      console.log('✅ Share access logged with ID:', logId, 'IP:', ipAddress)
+    }
 
     shareInfo.value = share
 
@@ -179,11 +202,69 @@ function getFolderName(folderPath) {
   return pathParts[pathParts.length - 1] || 'Root'
 }
 
+// Get client IP address
+async function getClientIPAddress() {
+  try {
+    // Try to get IP from a public service
+    const response = await fetch('https://api.ipify.org?format=json')
+    const data = await response.json()
+    return data.ip
+  } catch (error) {
+    console.warn('Could not get public IP, using fallback:', error)
+    // Fallback: try to get from headers or use a default
+    return 'unknown'
+  }
+}
+
+// Track file view
+function trackFileView() {
+  if (accessLogId.value) {
+    filesViewed.value++
+  }
+}
+
+// Track folder navigation
+function trackFolderNavigation() {
+  if (accessLogId.value) {
+    foldersNavigated.value++
+  }
+}
+
+// Update session duration when user leaves
+async function updateSessionDuration() {
+  if (accessLogId.value && sessionStartTime.value) {
+    const sessionDuration = Math.floor((Date.now() - sessionStartTime.value) / 1000)
+    
+    try {
+      await supabase.rpc('update_session_duration', {
+        access_log_id_param: accessLogId.value,
+        session_duration_seconds_param: sessionDuration,
+        files_viewed_param: filesViewed.value,
+        folders_navigated_param: foldersNavigated.value
+      })
+      console.log('✅ Session duration updated:', sessionDuration, 'seconds')
+    } catch (error) {
+      console.error('Error updating session duration:', error)
+    }
+  }
+}
+
 onMounted(async () => {
   // Wait a bit for the shared header to initialize supabase
   await new Promise(resolve => setTimeout(resolve, 100));
   
   loadShareInfo()
+  
+  // Add event listener to track when user leaves
+  window.addEventListener('beforeunload', updateSessionDuration)
+  window.addEventListener('pagehide', updateSessionDuration)
+})
+
+onUnmounted(() => {
+  // Remove event listeners and update session duration
+  window.removeEventListener('beforeunload', updateSessionDuration)
+  window.removeEventListener('pagehide', updateSessionDuration)
+  updateSessionDuration()
 })
 </script>
 

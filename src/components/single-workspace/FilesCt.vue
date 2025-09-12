@@ -19,6 +19,14 @@ const props = defineProps({
   shareToken: {
     type: String,
     default: null
+  },
+  onFileView: {
+    type: Function,
+    default: null
+  },
+  onFolderNavigation: {
+    type: Function,
+    default: null
   }
 });
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -1586,7 +1594,34 @@ async function loadExistingShares() {
       return;
     }
     
-    existingShares.value = shares || [];
+    // Load access logs for each share
+    const sharesWithLogs = await Promise.all(
+      (shares || []).map(async (share) => {
+        const { data: accessLogs, error: logsError } = await supabase
+          .from('folder_share_access_logs')
+          .select(`
+            id,
+            ip_address,
+            user_agent,
+            accessed_at,
+            session_duration_seconds,
+            files_viewed,
+            folders_navigated
+          `)
+          .eq('share_id', share.id)
+          .order('accessed_at', { ascending: false })
+          .limit(10); // Limit to last 10 accesses
+        
+        if (logsError) {
+          console.error('Error loading access logs for share:', share.id, logsError);
+          return { ...share, access_logs: [] };
+        }
+        
+        return { ...share, access_logs: accessLogs || [] };
+      })
+    );
+    
+    existingShares.value = sharesWithLogs;
     
   } catch (error) {
     console.error('Error loading existing shares:', error);
@@ -1640,6 +1675,36 @@ function formatShareDate(dateString) {
   if (!dateString) return 'Never';
   const date = new Date(dateString);
   return date.toLocaleDateString() + ' at ' + date.toLocaleTimeString();
+}
+
+// Format session duration
+function formatSessionDuration(seconds) {
+  if (!seconds) return 'Unknown';
+  
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${secs}s`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${secs}s`;
+  } else {
+    return `${secs}s`;
+  }
+}
+
+// Get browser name from user agent
+function getBrowserName(userAgent) {
+  if (!userAgent) return 'Unknown';
+  
+  if (userAgent.includes('Chrome')) return 'Chrome';
+  if (userAgent.includes('Firefox')) return 'Firefox';
+  if (userAgent.includes('Safari')) return 'Safari';
+  if (userAgent.includes('Edge')) return 'Edge';
+  if (userAgent.includes('Opera')) return 'Opera';
+  
+  return 'Other';
 }
 
 // Navigate to shared folder root (for shared view)
@@ -1725,6 +1790,11 @@ function getDisplayBreadcrumbs() {
 async function navigateToFolder(folder, fromUserAction = true) {
   try {
     console.log('Navigating to folder:', folder.name, 'path:', folder.path);
+    
+    // Track folder navigation in shared mode
+    if (props.isSharedView && props.onFolderNavigation) {
+      props.onFolderNavigation();
+    }
     
     // Check shared view restrictions
     if (props.isSharedView && props.initialFolder) {
@@ -1887,6 +1957,11 @@ async function navigateToFolder(folder, fromUserAction = true) {
 async function handleFileSelect(file) {
   try {
     console.log('handleFileSelect called with:', file.name);
+    
+    // Track file view in shared mode
+    if (props.isSharedView && props.onFileView) {
+      props.onFileView();
+    }
     
     // Prevent rapid double-clicks that cause deselection
     if (isNavigating.value) {
@@ -3669,7 +3744,7 @@ function removeFavorite(favorite) {
           </div>
           
           <div v-else class="shares-list">
-            <el-table :data="existingShares" size="small" max-height="300">
+            <el-table :data="existingShares" size="small" max-height="400">
               <el-table-column prop="shared_with_description" label="Shared With" min-width="200">
                 <template #default="{ row }">
                   <span v-if="row.shared_with_description">{{ row.shared_with_description }}</span>
@@ -3721,6 +3796,65 @@ function removeFavorite(favorite) {
                 </template>
               </el-table-column>
             </el-table>
+            
+            <!-- Access Logs Section -->
+            <div v-if="existingShares.length > 0" class="access-logs-section">
+              <h4>Recent Access Logs</h4>
+              <div v-for="share in existingShares" :key="share.id" class="share-access-logs">
+                <div v-if="share.access_logs && share.access_logs.length > 0" class="share-log-item">
+                  <div class="share-header">
+                    <strong>{{ share.shared_with_description || 'Unnamed Share' }}</strong>
+                    <span class="access-count">{{ share.access_count }} total accesses</span>
+                  </div>
+                  
+                  <el-table :data="share.access_logs" size="small" max-height="200" class="access-logs-table">
+                    <el-table-column label="IP Address" width="140">
+                      <template #default="{ row }">
+                        <el-tag size="small" type="primary">{{ row.ip_address }}</el-tag>
+                      </template>
+                    </el-table-column>
+                    
+                    <el-table-column label="Browser" width="100">
+                      <template #default="{ row }">
+                        <el-tag size="small" type="info">{{ getBrowserName(row.user_agent) }}</el-tag>
+                      </template>
+                    </el-table-column>
+                    
+                    <el-table-column label="Accessed" width="150">
+                      <template #default="{ row }">
+                        {{ formatShareDate(row.accessed_at) }}
+                      </template>
+                    </el-table-column>
+                    
+                    <!--el-table-column label="Duration" width="100">
+                      <template #default="{ row }">
+                        {{ formatSessionDuration(row.session_duration_seconds) }}
+                      </template>
+                    </el-table-column-->
+                    
+                    <el-table-column label="Activity" width="120">
+                      <template #default="{ row }">
+                        <div class="activity-stats">
+                          <span v-if="row.files_viewed > 0" class="activity-item">
+                            📄 {{ row.files_viewed }}
+                          </span>
+                          <span v-if="row.folders_navigated > 0" class="activity-item">
+                            📁 {{ row.folders_navigated }}
+                          </span>
+                          <span v-if="row.files_viewed === 0 && row.folders_navigated === 0" class="activity-item">
+                            👀 Viewed
+                          </span>
+                        </div>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+                
+                <div v-else class="no-access-logs">
+                  <span class="text-muted">No access logs yet</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -4515,5 +4649,71 @@ function removeFavorite(favorite) {
   margin-bottom: 20px;
   padding-bottom: 12px;
   border-bottom: 1px solid #e4e7ed;
+}
+
+.access-logs-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e4e7ed;
+}
+
+.access-logs-section h4 {
+  margin: 0 0 16px 0;
+  color: #303133;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.share-access-logs {
+  margin-bottom: 20px;
+}
+
+.share-log-item {
+  margin-bottom: 16px;
+}
+
+.share-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 4px;
+}
+
+.share-header strong {
+  color: #303133;
+  font-size: 13px;
+}
+
+.access-count {
+  color: #606266;
+  font-size: 12px;
+}
+
+.access-logs-table {
+  margin-top: 8px;
+}
+
+.activity-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activity-item {
+  font-size: 11px;
+  color: #606266;
+}
+
+.no-access-logs {
+  padding: 16px;
+  text-align: center;
+  color: #909399;
+  font-style: italic;
+  background: #fafafa;
+  border-radius: 4px;
+  margin-top: 8px;
 }
 </style>

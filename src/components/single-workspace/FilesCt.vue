@@ -295,11 +295,14 @@ function createNaturalSortKey(name) {
 const filteredItems = computed(() => {
   // If we have a search term, use enhanced search across all folders
   if (filters.value.search && filters.value.search.trim()) {
-    return searchResults.value;
+    return searchResults.value.filter(item => !item.name.startsWith('.'));
   }
   
   // Otherwise, use normal filtering for current folder
   let result = [...folders.value, ...files.value];
+  
+  // Filter out files and folders that start with a dot (hidden files)
+  result = result.filter(item => !item.name.startsWith('.'));
   
   if (filters.value.type) {
     result = result.filter(item => {
@@ -2983,7 +2986,8 @@ async function performEnhancedSearch() {
       }
     );
     
-    searchResults.value = results;
+    // Filter out files and folders that start with a dot (hidden files)
+    searchResults.value = results.filter(item => !item.name.startsWith('.'));
     
   } catch (error) {
     console.error('Enhanced search error:', error);

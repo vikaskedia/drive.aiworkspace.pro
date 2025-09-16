@@ -80,7 +80,7 @@
       
       <!-- Text Files -->
       <div v-else-if="isTextFile" class="text-preview">
-        <pre>{{ textContent }}</pre>
+        <pre v-html="processedTextContent"></pre>
       </div>
       
       <!-- Markdown Files -->
@@ -181,6 +181,53 @@ const isMarkdown = computed(() => {
   return ['md', 'markdown'].includes(ext);
 });
 const isUniverDoc = computed(() => props.file?.name?.toLowerCase().endsWith('.univer'));
+
+// Process text content to make URLs clickable
+const processedTextContent = computed(() => {
+  if (!textContent.value) return '';
+  
+  // Enhanced regular expression to match URLs
+  // This matches:
+  // - http:// and https:// URLs
+  // - URLs with port numbers
+  // - URLs with query parameters and fragments
+  // - Excludes trailing punctuation that's likely not part of the URL
+  const urlRegex = /(https?:\/\/(?:[-\w.])+(?::[0-9]+)?(?:\/(?:[\w\._~:/?#[\]@!$&'()*+,;=-])*)?)/gi;
+  
+  // Regular expression to match email addresses
+  const emailRegex = /\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/gi;
+  
+  // Split text into lines to preserve formatting
+  const lines = textContent.value.split('\n');
+  
+  return lines.map(line => {
+    // First replace URLs with clickable links
+    let processedLine = line.replace(urlRegex, (url) => {
+      // Clean up trailing punctuation that shouldn't be part of the URL
+      const cleanUrl = url.replace(/[.,;:!?)\]}]*$/, '');
+      const trailingPunct = url.substring(cleanUrl.length);
+      
+      return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="text-link">${cleanUrl}</a>${trailingPunct}`;
+    });
+    
+    // Then replace email addresses with mailto links (but skip those already inside URL links)
+    processedLine = processedLine.replace(emailRegex, (match, email, offset, string) => {
+      // Check if this email is already inside an <a> tag
+      const beforeMatch = string.substring(0, offset);
+      const openTags = (beforeMatch.match(/<a\b[^>]*>/gi) || []).length;
+      const closeTags = (beforeMatch.match(/<\/a>/gi) || []).length;
+      
+      // If we're inside an unclosed <a> tag, don't process this email
+      if (openTags > closeTags) {
+        return match;
+      }
+      
+      return `<a href="mailto:${email}" class="text-link">${email}</a>`;
+    });
+    
+    return processedLine;
+  }).join('\n');
+});
 
 // Scroll to top function
 function scrollToTop() {
@@ -884,6 +931,27 @@ onUnmounted(() => {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 14px;
   line-height: 1.5;
+}
+
+.text-preview .text-link {
+  color: #409EFF;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.text-preview .text-link:hover {
+  color: #337ecc;
+  text-decoration: underline;
+  border-bottom-color: #337ecc;
+}
+
+.text-preview .text-link:visited {
+  color: #6b5b95;
+}
+
+.text-preview .text-link:active {
+  color: #2d5aa0;
 }
 
 .no-preview {

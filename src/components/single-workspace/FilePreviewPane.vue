@@ -115,6 +115,16 @@
         />
       </div>
       
+      <!-- Email Files (.eml) -->
+      <div v-else-if="isEmailFile" class="email-viewer-container">
+        <EmailViewer
+          :file="file"
+          :url="getAuthenticatedDownloadUrl(file.download_url)"
+          @error="handleEmailError"
+          @load-complete="handleEmailLoadComplete"
+        />
+      </div>
+      
       <!-- No Preview Available -->
       <div v-else class="no-preview">
         <el-icon class="no-preview-icon"><Document /></el-icon>
@@ -133,6 +143,7 @@ import { ElMessage } from 'element-plus';
 import MuPdfViewer from '../common/MuPdfViewer.vue';
 import MarkDownEditor from '../common/MarkDownEditor.vue';
 import UniverDocument from '../common/UniverDocument.vue';
+import EmailViewer from '../common/EmailViewer.vue';
 
 const props = defineProps({
   file: {
@@ -181,6 +192,10 @@ const isMarkdown = computed(() => {
   return ['md', 'markdown'].includes(ext);
 });
 const isUniverDoc = computed(() => props.file?.name?.toLowerCase().endsWith('.univer'));
+const isEmailFile = computed(() => {
+  const ext = props.file?.name?.toLowerCase().split('.').pop();
+  return ext === 'eml';
+});
 
 // Process text content to make URLs clickable
 const processedTextContent = computed(() => {
@@ -507,6 +522,23 @@ function handlePdfLoadComplete() {
   error.value = null;
 }
 
+// Handle email error
+function handleEmailError(err) {
+  console.error('Email load error:', err);
+  loading.value = false;
+  error.value = `Failed to load email: ${err.message}`;
+}
+
+// Handle email load complete
+function handleEmailLoadComplete() {
+  console.log('Email load complete');
+  loading.value = false;
+  error.value = null;
+  setTimeout(() => {
+    scrollToTop();
+  }, 100);
+}
+
 // Cancel PDF loading
 function cancelPdfLoad() {
   console.log('PDF loading cancelled by user');
@@ -702,6 +734,9 @@ watch(() => props.file, async (newFile) => {
       // For images, load as blob to avoid CORS issues
       loading.value = false;
       await loadImageAsBlob();
+    } else if (isEmailFile.value) {
+      // For emails, the loading is handled by the EmailViewer component
+      loading.value = false;
     } else {
       loading.value = false;
     }
@@ -789,11 +824,12 @@ onUnmounted(() => {
   gap: 16px;
 }
 
-/* For PDFs, text, markdown, and Univer docs, use block layout */
+/* For PDFs, text, markdown, Univer docs, and emails use block layout */
 .preview-content .pdf-viewer,
 .preview-content .text-preview,
 .preview-content .markdown-preview,
-.preview-content .univer-document-preview {
+.preview-content .univer-document-preview,
+.preview-content .email-viewer-container {
   width: 100%;
   height: 100%;
   padding: 0;
@@ -1002,6 +1038,14 @@ onUnmounted(() => {
 }
 
 .univer-document-preview {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.email-viewer-container {
   width: 100%;
   height: 100%;
   display: flex;

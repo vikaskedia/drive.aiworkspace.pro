@@ -1292,12 +1292,24 @@ async function handleFileUpload() {
     loading.value = true;
     
     try {
+      // Get workspace for cache clearing
+      const workspace = workspaceWithGitRepo.value;
+      
       for (const file of files) {
         await uploadSingleFile(file);
       }
       
-      // Reload files after upload
-      await loadContents();
+      // Clear cache for the current folder to ensure uploaded files appear
+      if (workspace?.git_repo) {
+        try {
+          clearRepositoryCache(workspace.git_repo);
+        } catch (error) {
+          console.warn('Failed to clear cache after upload:', error);
+        }
+      }
+      
+      // Force reload files with cache bypass
+      await loadContents(true); // forceRefresh = true
       ElMessage.success(`Uploaded ${files.length} file(s) successfully`);
       
     } catch (error) {
@@ -1312,6 +1324,12 @@ async function handleFileUpload() {
 
 // Upload single file
 async function uploadSingleFile(file) {
+  // Get workspace with git_repo using the computed property that handles localStorage restoration
+  const workspace = workspaceWithGitRepo.value;
+  if (!workspace?.git_repo) {
+    throw new Error('No git repository configured for this workspace');
+  }
+  
   const giteaHost = import.meta.env.VITE_GITEA_HOST;
   const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
   
@@ -1326,7 +1344,7 @@ async function uploadSingleFile(file) {
   const filePath = currentFolder.value ? `${currentFolder.value.path}/${file.name}` : file.name;
   
   const response = await fetch(
-    `${giteaHost}/api/v1/repos/associateattorney/${currentWorkspace.value.git_repo}/contents/${filePath}`,
+    `${giteaHost}/api/v1/repos/associateattorney/${workspace.git_repo}/contents/${filePath}`,
     {
       method: 'POST',
       headers: getGiteaHeaders(giteaToken),
@@ -1359,11 +1377,18 @@ async function deleteFile(file) {
     
     if (!confirmed) return;
     
+    // Get workspace with git_repo using the computed property that handles localStorage restoration
+    const workspace = workspaceWithGitRepo.value;
+    if (!workspace?.git_repo) {
+      ElMessage.error('No git repository configured for this workspace');
+      return;
+    }
+    
     const giteaHost = import.meta.env.VITE_GITEA_HOST;
     const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
     
     const response = await fetch(
-      `${giteaHost}/api/v1/repos/associateattorney/${currentWorkspace.value.git_repo}/contents/${file.path}`,
+      `${giteaHost}/api/v1/repos/associateattorney/${workspace.git_repo}/contents/${file.path}`,
       {
         method: 'DELETE',
         headers: getGiteaHeaders(giteaToken),
@@ -1379,8 +1404,15 @@ async function deleteFile(file) {
       throw new Error(`Failed to delete ${file.name}`);
     }
     
-    // Reload files
-    await loadContents();
+    // Clear cache for the current folder to ensure deleted file doesn't appear
+    try {
+      clearRepositoryCache(workspace.git_repo);
+    } catch (error) {
+      console.warn('Failed to clear cache after delete:', error);
+    }
+    
+    // Force reload files with cache bypass
+    await loadContents(true); // forceRefresh = true
     ElMessage.success(`Deleted ${file.name}`);
     
     // Clear selection if deleted file was selected
@@ -1401,6 +1433,13 @@ async function createFolder() {
   if (!currentWorkspace.value || !newFolderName.value.trim()) return;
   
   try {
+    // Get workspace with git_repo using the computed property that handles localStorage restoration
+    const workspace = workspaceWithGitRepo.value;
+    if (!workspace?.git_repo) {
+      ElMessage.error('No git repository configured for this workspace');
+      return;
+    }
+    
     const giteaHost = import.meta.env.VITE_GITEA_HOST;
     const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
     
@@ -1409,7 +1448,7 @@ async function createFolder() {
     const placeholderPath = `${folderPath}/.gitkeep`;
     
     const response = await fetch(
-      `${giteaHost}/api/v1/repos/associateattorney/${currentWorkspace.value.git_repo}/contents/${placeholderPath}`,
+      `${giteaHost}/api/v1/repos/associateattorney/${workspace.git_repo}/contents/${placeholderPath}`,
       {
         method: 'POST',
         headers: getGiteaHeaders(giteaToken),
@@ -1425,9 +1464,17 @@ async function createFolder() {
       throw new Error(`Failed to create folder ${newFolderName.value}`);
     }
     
+    // Clear cache for the current folder to ensure new folder appears
+    try {
+      clearRepositoryCache(workspace.git_repo);
+    } catch (error) {
+      console.warn('Failed to clear cache after create folder:', error);
+    }
+    
     newFolderDialogVisible.value = false;
     newFolderName.value = '';
-    await loadContents();
+    // Force reload files with cache bypass
+    await loadContents(true); // forceRefresh = true
     ElMessage.success('Folder created successfully');
     
   } catch (error) {
@@ -1440,6 +1487,13 @@ async function createUniverDocument() {
   if (!currentWorkspace.value || !newDocName.value.trim()) return;
   
   try {
+    // Get workspace with git_repo using the computed property that handles localStorage restoration
+    const workspace = workspaceWithGitRepo.value;
+    if (!workspace?.git_repo) {
+      ElMessage.error('No git repository configured for this workspace');
+      return;
+    }
+    
     const docName = newDocName.value.endsWith('.univer') ? newDocName.value : `${newDocName.value}.univer`;
     const docPath = currentFolder.value ? `${currentFolder.value.path}/${docName}` : docName;
     
@@ -1456,7 +1510,7 @@ async function createUniverDocument() {
     const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
     
     const response = await fetch(
-      `${giteaHost}/api/v1/repos/associateattorney/${currentWorkspace.value.git_repo}/contents/${docPath}`,
+      `${giteaHost}/api/v1/repos/associateattorney/${workspace.git_repo}/contents/${docPath}`,
       {
         method: 'POST',
         headers: getGiteaHeaders(giteaToken),
@@ -1472,9 +1526,17 @@ async function createUniverDocument() {
       throw new Error(`Failed to create Univer document ${docName}`);
     }
     
+    // Clear cache for the current folder to ensure new document appears
+    try {
+      clearRepositoryCache(workspace.git_repo);
+    } catch (error) {
+      console.warn('Failed to clear cache after create document:', error);
+    }
+    
     newDocDialogVisible.value = false;
     newDocName.value = '';
-    await loadContents();
+    // Force reload files with cache bypass
+    await loadContents(true); // forceRefresh = true
     ElMessage.success('Univer document created successfully');
     
   } catch (error) {

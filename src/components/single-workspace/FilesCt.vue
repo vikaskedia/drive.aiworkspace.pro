@@ -367,9 +367,10 @@ const updatePageTitle = () => {
 
 // Update last fetch time
 const updateLastFetchTime = () => {
-  if (currentWorkspace.value?.git_repo) {
+  const workspace = workspaceWithGitRepo.value;
+  if (workspace?.git_repo) {
     const path = currentFolder.value?.path || '';
-    const fetchTime = getLastFetchTime(currentWorkspace.value.git_repo, path);
+    const fetchTime = getLastFetchTime(workspace.git_repo, path);
     lastFetchTime.value = fetchTime;
   }
 };
@@ -2452,13 +2453,24 @@ const showBackButton = computed(() => {
 
 // Download file
 async function downloadFile(file) {
+  if (!file || downloadingFiles.value.has(file.id)) {
+    return;
+  }
+  
+  // Get workspace with proper git_repo fallback
+  const workspace = workspaceWithGitRepo.value;
+  if (!workspace?.git_repo) {
+    ElMessage.error('Repository information not available. Please refresh the page.');
+    return;
+  }
+  
   try {
     downloadingFiles.value.add(file.id);
     
     // Create raw download URL with token parameter (like your old app)
     const giteaHost = import.meta.env.VITE_GITEA_HOST;
     const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
-    const rawDownloadUrl = `${giteaHost}/associateattorney/${currentWorkspace.value.git_repo}/raw/branch/main/${file.path}?token=${giteaToken}`;
+    const rawDownloadUrl = `${giteaHost}/associateattorney/${workspace.git_repo}/raw/branch/main/${file.path}?token=${giteaToken}`;
     
     console.log('Downloading file:', file.name, 'from URL:', rawDownloadUrl);
     
@@ -2585,13 +2597,19 @@ async function downloadFolder(folder) {
 async function getAllFilesInFolder(folderPath) {
   const allFiles = [];
   
+  // Get workspace with proper git_repo fallback
+  const workspace = workspaceWithGitRepo.value;
+  if (!workspace?.git_repo) {
+    throw new Error('Repository information not available. Please refresh the page.');
+  }
+  
   try {
     const giteaHost = import.meta.env.VITE_GITEA_HOST;
     const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
     
     // Build the API URL - handle empty path for root folder
     const apiPath = folderPath ? `/${folderPath}` : '';
-    const apiUrl = `${giteaHost}/api/v1/repos/associateattorney/${currentWorkspace.value.git_repo}/contents${apiPath}`;
+    const apiUrl = `${giteaHost}/api/v1/repos/associateattorney/${workspace.git_repo}/contents${apiPath}`;
     
     console.log('Fetching folder contents from:', apiUrl);
     
@@ -2616,7 +2634,7 @@ async function getAllFilesInFolder(folderPath) {
       
       if (item.type === 'file') {
         // Create raw download URL with token parameter (like your old app)
-        const rawDownloadUrl = `${giteaHost}/associateattorney/${currentWorkspace.value.git_repo}/raw/branch/main/${item.path}?token=${giteaToken}`;
+        const rawDownloadUrl = `${giteaHost}/associateattorney/${workspace.git_repo}/raw/branch/main/${item.path}?token=${giteaToken}`;
         
         // Add file to the list
         allFiles.push({
@@ -2874,14 +2892,16 @@ async function refreshCache() {
     return;
   }
 
-  // Check if git_repo is available, if not reload from URL
-  if (!currentWorkspace.value.git_repo) {
-    console.warn('No git_repo found in current workspace, reloading from URL');
+  // Get workspace with proper git_repo fallback
+  const workspace = workspaceWithGitRepo.value;
+  if (!workspace?.git_repo) {
+    console.warn('No git_repo found, trying to reload from URL');
     
     try {
       await loadCurrentWorkspaceFromUrl();
+      const reloadedWorkspace = workspaceWithGitRepo.value;
       
-      if (!currentWorkspace.value.git_repo) {
+      if (!reloadedWorkspace?.git_repo) {
         ElMessage.error('Unable to load workspace data. Please refresh the page.');
         return;
       }
@@ -2897,7 +2917,8 @@ async function refreshCache() {
     loading.value = true;
     
     // Clear cache for current repository
-    clearRepositoryCache(currentWorkspace.value.git_repo);
+    const finalWorkspace = workspaceWithGitRepo.value;
+    clearRepositoryCache(finalWorkspace.git_repo);
     
     // Force reload contents from server (bypassing cache)
     await loadContents();
@@ -3031,6 +3052,13 @@ async function performEnhancedSearch() {
   
   searchLoading.value = true;
   
+  // Get workspace with proper git_repo fallback
+  const workspace = workspaceWithGitRepo.value;
+  if (!workspace?.git_repo) {
+    console.warn('No git_repo available for search');
+    return;
+  }
+
   try {
     const giteaHost = import.meta.env.VITE_GITEA_HOST;
     const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
@@ -3038,7 +3066,7 @@ async function performEnhancedSearch() {
     const results = await searchCachedDataEnhanced(
       giteaHost,
       giteaToken,
-      currentWorkspace.value.git_repo,
+      workspace.git_repo,
       filters.value.search.trim(),
       {
         includeFiles: true,
@@ -3061,14 +3089,15 @@ async function performEnhancedSearch() {
 
 // Pre-load all subfolders for better search performance
 async function preloadSubfolders() {
-  if (!currentWorkspace.value?.git_repo) {
+  const workspace = workspaceWithGitRepo.value;
+  if (!workspace?.git_repo) {
     return;
   }
   
   try {
     const giteaHost = import.meta.env.VITE_GITEA_HOST;
     const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
-    const repoName = currentWorkspace.value.git_repo;
+    const repoName = workspace.git_repo;
     
     // Get root data to see what subfolders exist
     let rootData = getCachedData(repoName, '');

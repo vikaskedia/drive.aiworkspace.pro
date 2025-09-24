@@ -45,9 +45,22 @@
         <div class="email-header-item" v-if="emailData.attachments && emailData.attachments.length > 0">
           <span class="email-label">Attachments:</span>
           <span class="email-value">
-            <el-tag v-for="attachment in emailData.attachments" :key="attachment" size="small" class="attachment-tag">
-              {{ attachment }}
-            </el-tag>
+            <div v-for="attachment in emailData.attachments" :key="attachment.filename" class="attachment-item">
+              <el-button 
+                size="small" 
+                type="primary" 
+                :icon="Download" 
+                @click="downloadAttachment(attachment)"
+                class="attachment-button"
+                :title="`Download ${attachment.filename} (${attachment.contentType})`"
+              >
+                {{ attachment.filename }}
+              </el-button>
+              <span class="attachment-info">
+                {{ formatFileSize(attachment.size) }}
+                <span v-if="attachment.disposition === 'inline'" class="inline-indicator">(inline)</span>
+              </span>
+            </div>
           </span>
         </div>
       </div>
@@ -72,7 +85,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
-import { Message, Warning } from '@element-plus/icons-vue';
+import { Message, Warning, Download } from '@element-plus/icons-vue';
 
 const props = defineProps({
   file: {
@@ -103,7 +116,7 @@ const emailData = ref({
   date: '',
   textBody: '',
   htmlBody: '',
-  attachments: []
+  attachments: [] // Each attachment will be: { filename, contentType, data, size }
 });
 
 // Sanitized HTML body
@@ -546,12 +559,33 @@ function parseMultipartContent(bodyPart, contentType) {
       }
       
       // Handle the decoded content based on its type and disposition
-      if (contentDisposition.includes('attachment')) {
+      if (contentDisposition.includes('attachment') || 
+          (contentDisposition.includes('inline') && partContentType && !partContentType.includes('text/'))) {
         // Extract attachment filename
         const filenameMatch = contentDisposition.match(/filename=["']?([^"';]+)["']?/i);
-        if (filenameMatch) {
-          emailData.value.attachments.push(filenameMatch[1]);
-          console.log(`Part ${i}: Found attachment:`, filenameMatch[1]);
+        if (filenameMatch && decodedContent) {
+          const attachment = {
+            filename: filenameMatch[1],
+            contentType: partContentType || 'application/octet-stream',
+            data: decodedContent,
+            size: decodedContent.length,
+            disposition: contentDisposition.includes('attachment') ? 'attachment' : 'inline'
+          };
+          emailData.value.attachments.push(attachment);
+          console.log(`Part ${i}: Found ${attachment.disposition}:`, filenameMatch[1], 'Size:', decodedContent.length, 'bytes');
+        } else if (!partContentType.includes('text/') && decodedContent && decodedContent.length > 100) {
+          // Handle attachments without proper filename (fallback)
+          const extension = getExtensionFromContentType(partContentType);
+          const fallbackName = `attachment_${i}${extension}`;
+          const attachment = {
+            filename: fallbackName,
+            contentType: partContentType || 'application/octet-stream',
+            data: decodedContent,
+            size: decodedContent.length,
+            disposition: 'attachment'
+          };
+          emailData.value.attachments.push(attachment);
+          console.log(`Part ${i}: Found unnamed attachment:`, fallbackName, 'Size:', decodedContent.length, 'bytes');
         }
       } else if (partContentType.includes('text/html')) {
         // HTML content
@@ -699,6 +733,83 @@ function getAuthenticatedDownloadUrl(originalUrl) {
   }
 }
 
+// Download attachment
+function downloadAttachment(attachment) {
+  try {
+    console.log('Downloading attachment:', attachment.filename, 'Type:', attachment.contentType);
+    
+    let binaryData;
+    
+    // Handle different data types
+    if (attachment.data instanceof Uint8Array || attachment.data instanceof ArrayBuffer) {
+      // Already binary data
+      binaryData = attachment.data;
+    } else if (typeof attachment.data === 'string') {
+      // String data - convert to binary array
+      binaryData = new Uint8Array(attachment.data.length);
+      for (let i = 0; i < attachment.data.length; i++) {
+        binaryData[i] = attachment.data.charCodeAt(i) & 0xFF; // Ensure it stays within byte range
+      }
+    } else {
+      throw new Error('Unsupported attachment data type');
+    }
+    
+    // Create blob and download
+    const blob = new Blob([binaryData], { type: attachment.contentType });
+    const url = URL.createObjectURL(blob);
+    
+    // Create temporary download link
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = attachment.filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    // Clean up the URL
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+    
+    console.log('Successfully downloaded:', attachment.filename, 'Size:', attachment.size, 'bytes');
+  } catch (error) {
+    console.error('Error downloading attachment:', error);
+    // Show user-friendly error message
+    alert(`Failed to download ${attachment.filename}: ${error.message}`);
+  }
+}
+
+// Format file size for display
+function formatFileSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// Get file extension from content type
+function getExtensionFromContentType(contentType) {
+  if (!contentType) return '';
+  
+  const mimeToExt = {
+    'application/pdf': '.pdf',
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg', 
+    'image/png': '.png',
+    'image/gif': '.gif',
+    'text/plain': '.txt',
+    'text/html': '.html',
+    'application/zip': '.zip',
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.ms-excel': '.xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx'
+  };
+  
+  return mimeToExt[contentType.toLowerCase()] || '';
+}
+
 // Retry loading
 function retryLoad() {
   loadEmailContent();
@@ -808,9 +919,30 @@ onMounted(() => {
   color: #333;
 }
 
-.attachment-tag {
-  margin-right: 8px;
-  margin-bottom: 4px;
+.attachment-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 8px;
+}
+
+.attachment-item:last-child {
+  margin-bottom: 0;
+}
+
+.attachment-button {
+  flex-shrink: 0;
+}
+
+.attachment-info {
+  font-size: 12px;
+  color: #909399;
+  font-style: italic;
+}
+
+.inline-indicator {
+  color: #67C23A;
+  font-weight: 500;
 }
 
 .email-body {

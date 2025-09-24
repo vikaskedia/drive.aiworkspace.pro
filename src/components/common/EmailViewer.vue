@@ -177,30 +177,66 @@ async function loadEmailContent() {
     
     console.log('Loading email file:', props.file.name, props.file.path);
     
-    // Use the API endpoint to get file content
-    const response = await fetch(
-      `${giteaHost}/api/v1/repos/${props.file.repository}/contents/${props.file.path}`,
-      {
+    let emailContent = '';
+    
+    try {
+      // First try to use the API endpoint to get file content
+      const response = await fetch(
+        `${giteaHost}/api/v1/repos/${props.file.repository}/contents/${props.file.path}`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `token ${giteaToken}`,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache'
+          }
+        }
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Email file API response:', data);
+        
+        // Check if content is available (API doesn't return content for large files)
+        if (data.content) {
+          // Content from API is base64 encoded
+          emailContent = atob(data.content);
+          console.log('Loaded email content via API, length:', emailContent.length);
+        } else {
+          console.log('API response does not contain content field, trying direct download...');
+          throw new Error('No content in API response');
+        }
+      } else {
+        console.log('API request failed, trying direct download...');
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
+    } catch (apiError) {
+      console.log('API method failed, falling back to direct download:', apiError.message);
+      
+      // Fallback: Use direct download URL for large files
+      if (!props.file.download_url) {
+        throw new Error('No download URL available for direct file access');
+      }
+      
+      const directUrl = getAuthenticatedDownloadUrl(props.file.download_url);
+      console.log('Using direct download URL:', directUrl);
+      
+      const directResponse = await fetch(directUrl, {
         method: 'GET',
         headers: {
-          'Authorization': `token ${giteaToken}`,
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
           'Cache-Control': 'no-cache'
         }
+      });
+      
+      if (!directResponse.ok) {
+        throw new Error(`Failed to load email file via direct URL: ${directResponse.status} ${directResponse.statusText}`);
       }
-    );
-    
-    if (!response.ok) {
-      throw new Error(`Failed to load email file: ${response.status} ${response.statusText}`);
+      
+      emailContent = await directResponse.text();
+      console.log('Loaded email content via direct download, length:', emailContent.length);
     }
     
-    const data = await response.json();
-    console.log('Email file API response:', data);
-    
-    // Content from API is base64 encoded
-    const emailContent = atob(data.content);
-    console.log('Decoded email content length:', emailContent.length);
     console.log('First 500 chars of email content:', emailContent.substring(0, 500));
     
     // Parse the email content
@@ -620,6 +656,46 @@ function formatEmailDate(dateString) {
     return date.toLocaleString();
   } catch (err) {
     return dateString;
+  }
+}
+
+// Get authenticated download URL
+function getAuthenticatedDownloadUrl(originalUrl) {
+  if (!originalUrl) {
+    console.warn('No original URL provided');
+    return '';
+  }
+  
+  try {
+    console.log('Getting authenticated URL for:', originalUrl);
+    
+    // If the URL already contains token (raw URL format), return as-is
+    if (originalUrl.includes('?token=')) {
+      console.log('URL already contains token, using as-is');
+      return originalUrl;
+    }
+    
+    // Add token for authentication
+    const giteaToken = import.meta.env.VITE_GITEA_TOKEN;
+    if (!giteaToken) {
+      console.error('VITE_GITEA_TOKEN not found');
+      return originalUrl;
+    }
+    
+    const url = new URL(originalUrl);
+    
+    // Remove any existing token parameter
+    url.searchParams.delete('token');
+    
+    // Add token as a query parameter
+    url.searchParams.set('token', giteaToken);
+    
+    const finalUrl = url.toString();
+    console.log('Final authenticated URL:', finalUrl);
+    return finalUrl;
+  } catch (error) {
+    console.error('Error creating authenticated URL:', error, 'Original URL:', originalUrl);
+    return originalUrl;
   }
 }
 

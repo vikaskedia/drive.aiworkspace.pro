@@ -43,23 +43,48 @@
           <span class="email-value">{{ emailData.date }}</span>
         </div>
         <div class="email-header-item" v-if="emailData.attachments && emailData.attachments.length > 0">
-          <span class="email-label">Attachments:</span>
+          <span class="email-label">
+            Attachments:
+            <span class="attachment-count">({{ emailData.attachments.length }})</span>
+          </span>
           <span class="email-value">
-            <div v-for="attachment in emailData.attachments" :key="attachment.filename" class="attachment-item">
-              <el-button 
-                size="small" 
-                type="primary" 
-                :icon="Download" 
-                @click="downloadAttachment(attachment)"
-                class="attachment-button"
-                :title="`Download ${attachment.filename} (${attachment.contentType})`"
-              >
-                {{ attachment.filename }}
-              </el-button>
-              <span class="attachment-info">
-                {{ formatFileSize(attachment.size) }}
-                <span v-if="attachment.disposition === 'inline'" class="inline-indicator">(inline)</span>
-              </span>
+            <div class="attachments-container">
+              <div v-for="attachment in visibleAttachments" :key="attachment.filename" class="attachment-item">
+                <el-button 
+                  size="small" 
+                  type="primary" 
+                  :icon="Download" 
+                  @click="downloadAttachment(attachment)"
+                  class="attachment-button"
+                  :title="`Download ${attachment.filename} (${attachment.contentType})`"
+                >
+                  {{ attachment.filename }}
+                </el-button>
+                <span class="attachment-info">
+                  {{ formatFileSize(attachment.size) }}
+                  <span v-if="attachment.disposition === 'inline'" class="inline-indicator">(inline)</span>
+                </span>
+              </div>
+              
+              <!-- Show More/Less Button -->
+              <div v-if="hasMoreAttachments" class="attachment-toggle">
+                <el-button 
+                  size="small" 
+                  type="info" 
+                  text
+                  @click="toggleAttachments"
+                  class="toggle-button"
+                >
+                  <template v-if="!attachmentsExpanded">
+                    <el-icon><ArrowDown /></el-icon>
+                    Show {{ hiddenAttachmentsCount }} more attachment{{ hiddenAttachmentsCount > 1 ? 's' : '' }}
+                  </template>
+                  <template v-else>
+                    <el-icon><ArrowUp /></el-icon>
+                    Show less
+                  </template>
+                </el-button>
+              </div>
             </div>
           </span>
         </div>
@@ -85,7 +110,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
-import { Message, Warning, Download } from '@element-plus/icons-vue';
+import { Message, Warning, Download, ArrowDown, ArrowUp } from '@element-plus/icons-vue';
 
 const props = defineProps({
   file: {
@@ -105,6 +130,8 @@ const loading = ref(true);
 const error = ref(null);
 const debugMode = ref(false);
 const debugInfo = ref('');
+const attachmentsExpanded = ref(false);
+const maxAttachmentsToShow = 3; // Show only first 3 attachments by default
 
 // Email data
 const emailData = ref({
@@ -143,6 +170,30 @@ const sanitizedHtmlBody = computed(() => {
   });
   
   return html;
+});
+
+// Computed properties for attachment display
+const visibleAttachments = computed(() => {
+  if (!emailData.value.attachments || emailData.value.attachments.length === 0) {
+    return [];
+  }
+  
+  if (attachmentsExpanded.value || emailData.value.attachments.length <= maxAttachmentsToShow) {
+    return emailData.value.attachments;
+  }
+  
+  return emailData.value.attachments.slice(0, maxAttachmentsToShow);
+});
+
+const hasMoreAttachments = computed(() => {
+  return emailData.value.attachments && emailData.value.attachments.length > maxAttachmentsToShow;
+});
+
+const hiddenAttachmentsCount = computed(() => {
+  if (!hasMoreAttachments.value || attachmentsExpanded.value) {
+    return 0;
+  }
+  return emailData.value.attachments.length - maxAttachmentsToShow;
 });
 
 // Process email text content to make URLs and emails clickable
@@ -282,6 +333,9 @@ function parseEmailContent(content) {
       htmlBody: '',
       attachments: []
     };
+    
+    // Reset attachment expansion state
+    attachmentsExpanded.value = false;
     
     // Store debug information
     debugInfo.value = `Raw content length: ${content.length}\n\nFirst 1000 chars:\n${content.substring(0, 1000)}\n\n`;
@@ -810,6 +864,11 @@ function getExtensionFromContentType(contentType) {
   return mimeToExt[contentType.toLowerCase()] || '';
 }
 
+// Toggle attachment expansion
+function toggleAttachments() {
+  attachmentsExpanded.value = !attachmentsExpanded.value;
+}
+
 // Retry loading
 function retryLoad() {
   loadEmailContent();
@@ -885,15 +944,17 @@ onMounted(() => {
 
 .email-header {
   border-bottom: 2px solid #e1e8ed;
-  padding: 20px;
+  padding: 12px 15px;
   background: #f8f9fa;
   flex-shrink: 0;
 }
 
 .email-header-item {
   display: flex;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   align-items: flex-start;
+  font-size: 0.85rem;
+  line-height: 1;
 }
 
 .email-header-item:last-child {
@@ -908,6 +969,12 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
+.attachment-count {
+  font-weight: 400;
+  color: #909399;
+  font-size: 12px;
+}
+
 .email-value {
   color: #555;
   word-break: break-word;
@@ -917,6 +984,10 @@ onMounted(() => {
 .subject-value {
   font-weight: 500;
   color: #333;
+}
+
+.attachments-container {
+  width: 100%;
 }
 
 .attachment-item {
@@ -943,6 +1014,27 @@ onMounted(() => {
 .inline-indicator {
   color: #67C23A;
   font-weight: 500;
+}
+
+.attachment-toggle {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.toggle-button {
+  font-size: 12px;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #606266;
+  transition: all 0.2s ease;
+}
+
+.toggle-button:hover {
+  color: #409EFF;
+  background-color: #f0f9ff;
 }
 
 .email-body {

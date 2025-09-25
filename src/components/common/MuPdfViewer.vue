@@ -1,45 +1,22 @@
 <template>
   <div class="mupdf-viewer">
     <!-- PDF Viewer Header with Controls -->
-    <div class="pdf-header">
-      <div class="pdf-controls">
-        <!-- Navigation Controls -->
-        <!--div class="nav-controls">
-          <el-button 
-            @click="previousPage" 
-            :disabled="currentPage <= 1"
-            size="small"
-            :icon="ArrowLeft"
-          >
-          </el-button>
-          <span class="page-info">
-            Page {{ currentPage }} of {{ totalPages }}
-          </span>
-          <el-button 
-            @click="nextPage" 
-            :disabled="currentPage >= totalPages"
-            size="small"
-            :icon="ArrowRight"
-          >
-          </el-button>
-        </div-->
-
-        <!-- Zoom Controls -->
+    <div class="pdf-header" :class="{ 'edit-mode-header': editMode }">
+      <!-- First Row: Main Controls -->
+      <div class="header-row-1">
         <div class="zoom-controls">
-          <el-button @click="zoomOut" size="small" :icon="ZoomOut">-</el-button>
+          <el-button @click="zoomOut" size="small" :icon="ZoomOut" />
           <span class="zoom-level">{{ Math.round(zoom * 100) }}%</span>
-          <el-button @click="zoomIn" size="small" :icon="ZoomIn">+</el-button>
-          <el-button @click="fitToWidth" size="small">Fit Width</el-button>
-          <el-button @click="fitToPage" size="small">Fit Page</el-button>
+          <el-button @click="zoomIn" size="small" :icon="ZoomIn" />
+          <el-button @click="fitToWidth" size="small">Fit</el-button>
         </div>
 
-        <!-- Search Controls -->
         <div class="search-controls">
           <el-input
             v-model="searchTerm"
-            placeholder="Search in PDF..."
+            placeholder="Search..."
             size="small"
-            style="width: 200px;"
+            style="width: 160px;"
             @keyup.enter="searchInPdf"
             @input="debouncedSearch"
           >
@@ -47,28 +24,85 @@
               <el-button @click="searchInPdf" :icon="Search" />
             </template>
           </el-input>
-          <div v-if="searchResults.length > 0" class="search-results">
-            <span>{{ currentSearchResult + 1 }} of {{ searchResults.length }}</span>
+          <div v-if="searchResults.length > 0" class="search-results-compact">
+            <span class="result-count">{{ currentSearchResult + 1 }}/{{ searchResults.length }}</span>
             <el-button @click="previousSearchResult" size="small" :icon="ArrowUp" />
             <el-button @click="nextSearchResult" size="small" :icon="ArrowDown" />
             <el-button @click="clearSearch" size="small" :icon="Close" />
           </div>
         </div>
+
+        <div class="edit-toggle-compact">
+          <el-button 
+            @click="toggleEditMode" 
+            :type="editMode ? 'danger' : 'primary'"
+            size="small"
+          >
+            {{ editMode ? '✖ Exit' : '✏️ Edit' }}
+          </el-button>
+        </div>
       </div>
 
-      <!-- Edit Controls -->
-      <div class="edit-controls" v-if="editMode">
-        <el-button @click="saveChanges" type="primary" size="small" :loading="saving">
-          Save Changes
-        </el-button>
-        <el-button @click="cancelEdit" size="small">
-          Cancel
-        </el-button>
+      <!-- Second Row: Annotation Tools (only visible in edit mode) -->
+      <div v-if="editMode" class="header-row-2">
+        <div class="annotation-tools">
+          <div class="tool-buttons">
+            <el-button 
+              @click="setEditTool('text')" 
+              :type="editTool === 'text' ? 'primary' : 'default'"
+              size="small"
+              class="tool-btn"
+            >
+              📝 Text
+            </el-button>
+            <el-button 
+              @click="setEditTool('highlight')" 
+              :type="editTool === 'highlight' ? 'primary' : 'default'"
+              size="small"
+              class="tool-btn"
+            >
+              🖍️ Highlight
+            </el-button>
+            <el-button 
+              @click="setEditTool('draw')" 
+              :type="editTool === 'draw' ? 'primary' : 'default'"
+              size="small"
+              class="tool-btn"
+            >
+              ✏️ Draw
+            </el-button>
+          </div>
+          
+          <div class="tool-settings">
+            <el-color-picker v-model="annotationColor" size="small" />
+            <el-input-number 
+              v-model="annotationSize" 
+              :min="1" 
+              :max="20" 
+              size="small"
+              controls-position="right"
+              style="width: 70px;"
+            />
+          </div>
+
+          <div class="annotation-info">
+            <span class="current-tool-badge">{{ editTool.toUpperCase() }}</span>
+            <span class="annotation-count-compact">{{ annotations.length }}</span>
+          </div>
+
+          <div class="edit-actions-compact">
+            <el-button @click="clearAllAnnotations" size="small" type="warning">Clear</el-button>
+            <el-button @click="saveChanges" type="success" size="small" :loading="saving">
+              {{ saving ? 'Saving...' : '💾 Save to Repo' }}
+            </el-button>
+            <el-button @click="cancelEdit" size="small">Cancel</el-button>
+          </div>
+        </div>
       </div>
     </div>
 
     <!-- PDF Content Area -->
-    <div class="pdf-content" ref="pdfContainer">
+    <div class="pdf-content" ref="pdfContainer" :class="{ 'edit-mode-active': editMode }">
       <!-- Loading Overlay -->
       <div v-if="loading || isRenderingAllPages" class="loading-overlay">
         <el-icon class="is-loading"><Loading /></el-icon>
@@ -89,10 +123,6 @@
         <canvas 
           ref="pdfCanvas" 
           class="pdf-canvas"
-          @mousedown="handleMouseDown"
-          @mousemove="handleMouseMove"
-          @mouseup="handleMouseUp"
-          @click="handleCanvasClick"
         ></canvas>
         
         <!-- Search Highlights -->
@@ -117,54 +147,7 @@
       </div>
     </div>
 
-    <!-- Edit Mode Toolbar -->
-    <div v-if="editMode" class="edit-toolbar">
-      <div class="tool-group">
-        <el-button 
-          @click="setEditTool('text')" 
-          :type="editTool === 'text' ? 'primary' : 'default'"
-          size="small"
-        >
-          Text
-        </el-button>
-        <el-button 
-          @click="setEditTool('highlight')" 
-          :type="editTool === 'highlight' ? 'primary' : 'default'"
-          size="small"
-        >
-          Highlight
-        </el-button>
-        <el-button 
-          @click="setEditTool('draw')" 
-          :type="editTool === 'draw' ? 'primary' : 'default'"
-          size="small"
-        >
-          Draw
-        </el-button>
-      </div>
-      
-      <div class="tool-group">
-        <el-color-picker v-model="annotationColor" size="small" />
-        <el-input-number 
-          v-model="annotationSize" 
-          :min="1" 
-          :max="20" 
-          size="small"
-          style="width: 80px;"
-        />
-      </div>
-    </div>
 
-    <!-- Edit Mode Toggle -->
-    <div class="edit-toggle">
-      <el-button 
-        @click="toggleEditMode" 
-        :type="editMode ? 'danger' : 'success'"
-        size="small"
-      >
-        {{ editMode ? 'Exit Edit Mode' : 'Edit PDF' }}
-      </el-button>
-    </div>
   </div>
 </template>
 
@@ -184,6 +167,8 @@ import {
 } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import mupdfService from '../../utils/mupdfService';
+import { uploadFileToGitea, generateEditedFilename, getWorkspaceGitInfo } from '../../utils/giteaFileUpload';
+import { useWorkspaceStore } from '../../store/workspace';
 
 const props = defineProps({
   file: {
@@ -197,6 +182,9 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['save', 'error', 'load-complete']);
+
+// Store references
+const workspaceStore = useWorkspaceStore();
 
 // Component state
 const loading = ref(true);
@@ -228,6 +216,8 @@ const ctx = ref(null);
 // Mouse interaction state
 const isDrawing = ref(false);
 const lastMousePos = ref({ x: 0, y: 0 });
+const currentDrawingPage = ref(null);
+const activePageCanvas = ref(null);
 
 // MuPDF service instance
 let searchTimeout = null;
@@ -358,7 +348,14 @@ async function loadAllPages() {
         transform-origin: top center;
         transition: transform 0.2s ease;
         display: block;
+        cursor: crosshair;
       `;
+      
+      // Add mouse event listeners for annotations
+      pageCanvas.addEventListener('mousedown', (e) => handlePageMouseDown(e, pageNum, pageCanvas));
+      pageCanvas.addEventListener('mousemove', (e) => handlePageMouseMove(e, pageNum, pageCanvas));
+      pageCanvas.addEventListener('mouseup', (e) => handlePageMouseUp(e, pageNum, pageCanvas));
+      pageCanvas.addEventListener('click', (e) => handlePageClick(e, pageNum, pageCanvas));
       
       // Render page to canvas at 1.0 zoom first
       await mupdfService.renderPage(pageNum, pageCanvas, 1.0);
@@ -539,6 +536,44 @@ function applyZoomToAllPages() {
         pageContainer.style.height = `${scaledHeight}px`;
         pageContainer.style.minHeight = `${scaledHeight}px`;
       }
+      
+      // Re-render annotations on this page after zoom change
+      redrawAnnotationsOnPage(index + 1, pageCanvas);
+    }
+  });
+}
+
+// Function to redraw annotations on a specific page
+function redrawAnnotationsOnPage(pageNumber, pageCanvas) {
+  const pageAnnotations = annotations.value.filter(ann => ann.page === pageNumber);
+  if (pageAnnotations.length === 0) return;
+  
+  const ctx = pageCanvas.getContext('2d');
+  
+  pageAnnotations.forEach(annotation => {
+    if (annotation.type === 'draw') {
+      if (annotation.points && annotation.points.length >= 2) {
+        ctx.beginPath();
+        ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
+        ctx.lineTo(annotation.points[1].x, annotation.points[1].y);
+        ctx.strokeStyle = annotation.color;
+        ctx.lineWidth = annotation.size;
+        ctx.stroke();
+      }
+    } else if (annotation.type === 'text') {
+      ctx.fillStyle = annotation.color;
+      ctx.font = `${annotation.size * 4}px Arial`;
+      ctx.fillText(annotation.text, annotation.position.x, annotation.position.y);
+    } else if (annotation.type === 'highlight') {
+      ctx.fillStyle = annotation.color;
+      ctx.globalAlpha = 0.3;
+      ctx.fillRect(
+        annotation.position.x,
+        annotation.position.y,
+        annotation.width || 100,
+        annotation.height || (annotation.size * 3)
+      );
+      ctx.globalAlpha = 1.0;
     }
   });
 }
@@ -649,13 +684,15 @@ function clearSearchHighlights() {
   console.log('Clearing search highlights from all pages');
   
   // Re-render all pages to clear highlights
-  pageCanvases.value.forEach((pageCanvas, index) => {
+  pageCanvases.value.forEach(async (pageCanvas, index) => {
     if (pageCanvas) {
       const pageNum = index + 1;
       // Re-render the page without highlights at 1.0 zoom
-      mupdfService.renderPage(pageNum, pageCanvas, 1.0);
+      await mupdfService.renderPage(pageNum, pageCanvas, 1.0);
       // Re-apply current zoom
       pageCanvas.style.transform = `scale(${zoom.value})`;
+      // Redraw annotations after clearing highlights
+      redrawAnnotationsOnPage(pageNum, pageCanvas);
     }
   });
 }
@@ -755,8 +792,10 @@ function drawSearchHighlights() {
 // Edit mode functions
 function toggleEditMode() {
   editMode.value = !editMode.value;
+  console.log('Edit mode toggled:', editMode.value);
+  
   if (editMode.value) {
-    ElMessage.info('Edit mode enabled. Click and drag to add annotations.');
+    ElMessage.info(`📝 Edit mode enabled! Use the tools above to annotate the PDF.`);
   } else {
     ElMessage.info('Edit mode disabled.');
   }
@@ -764,129 +803,144 @@ function toggleEditMode() {
 
 function setEditTool(tool) {
   editTool.value = tool;
+  console.log('Edit tool changed to:', tool);
+  ElMessage.success(`Switched to ${tool} tool`);
 }
 
-// Mouse interaction functions
-function handleMouseDown(event) {
+// Mouse interaction functions for individual pages
+function handlePageMouseDown(event, pageNumber, pageCanvas) {
   if (!editMode.value) return;
   
   isDrawing.value = true;
-  const rect = pdfCanvas.value.getBoundingClientRect();
-  lastMousePos.value = {
-    x: (event.clientX - rect.left) / zoom.value,
-    y: (event.clientY - rect.top) / zoom.value
-  };
+  currentDrawingPage.value = pageNumber;
+  activePageCanvas.value = pageCanvas;
+  
+  const rect = pageCanvas.getBoundingClientRect();
+  const canvasPos = getCanvasPosition(event, rect, pageCanvas);
+  lastMousePos.value = canvasPos;
 }
 
-function handleMouseMove(event) {
-  if (!editMode.value || !isDrawing.value) return;
+function handlePageMouseMove(event, pageNumber, pageCanvas) {
+  if (!editMode.value || !isDrawing.value || currentDrawingPage.value !== pageNumber) return;
   
-  const rect = pdfCanvas.value.getBoundingClientRect();
-  const currentPos = {
-    x: (event.clientX - rect.left) / zoom.value,
-    y: (event.clientY - rect.top) / zoom.value
-  };
+  const rect = pageCanvas.getBoundingClientRect();
+  const currentPos = getCanvasPosition(event, rect, pageCanvas);
   
   if (editTool.value === 'draw') {
+    const ctx = pageCanvas.getContext('2d');
     // Draw line
-    ctx.value.beginPath();
-    ctx.value.moveTo(lastMousePos.value.x, lastMousePos.value.y);
-    ctx.value.lineTo(currentPos.x, currentPos.y);
-    ctx.value.strokeStyle = annotationColor.value;
-    ctx.value.lineWidth = annotationSize.value;
-    ctx.value.stroke();
+    ctx.beginPath();
+    ctx.moveTo(lastMousePos.value.x, lastMousePos.value.y);
+    ctx.lineTo(currentPos.x, currentPos.y);
+    ctx.strokeStyle = annotationColor.value;
+    ctx.lineWidth = annotationSize.value;
+    ctx.stroke();
     
-    // Add to annotations
+    // Add to annotations with page information
     annotations.value.push({
       type: 'draw',
+      page: pageNumber,
       points: [lastMousePos.value, currentPos],
       color: annotationColor.value,
       size: annotationSize.value,
-      style: {
-        position: 'absolute',
-        left: `${Math.min(lastMousePos.value.x, currentPos.x)}px`,
-        top: `${Math.min(lastMousePos.value.y, currentPos.y)}px`,
-        width: `${Math.abs(currentPos.x - lastMousePos.value.x)}px`,
-        height: `${Math.abs(currentPos.y - lastMousePos.value.y)}px`,
-        backgroundColor: annotationColor.value,
-        opacity: 0.7,
-        pointerEvents: 'auto',
-        zIndex: 5
-      }
+      canvasCoords: true
     });
   }
   
   lastMousePos.value = currentPos;
 }
 
-function handleMouseUp(event) {
+function handlePageMouseUp(event, pageNumber, pageCanvas) {
   if (!editMode.value) return;
   
   isDrawing.value = false;
+  currentDrawingPage.value = null;
+  activePageCanvas.value = null;
   
   if (editTool.value === 'text') {
-    const rect = pdfCanvas.value.getBoundingClientRect();
-    const pos = {
-      x: (event.clientX - rect.left) / zoom.value,
-      y: (event.clientY - rect.top) / zoom.value
-    };
+    const rect = pageCanvas.getBoundingClientRect();
+    const pos = getCanvasPosition(event, rect, pageCanvas);
     
     // Add text annotation
     const text = prompt('Enter text:');
     if (text) {
+      const ctx = pageCanvas.getContext('2d');
+      
       annotations.value.push({
         type: 'text',
+        page: pageNumber,
         text: text,
         position: pos,
         color: annotationColor.value,
         size: annotationSize.value,
-        style: {
-          position: 'absolute',
-          left: `${pos.x}px`,
-          top: `${pos.y}px`,
-          color: annotationColor.value,
-          fontSize: `${annotationSize.value * 4}px`,
-          fontWeight: 'bold',
-          pointerEvents: 'auto',
-          zIndex: 5
-        }
+        canvasCoords: true
       });
       
       // Draw text on canvas
-      ctx.value.fillStyle = annotationColor.value;
-      ctx.value.font = `${annotationSize.value * 4}px Arial`;
-      ctx.value.fillText(text, pos.x, pos.y);
+      ctx.fillStyle = annotationColor.value;
+      ctx.font = `${annotationSize.value * 4}px Arial`;
+      ctx.fillText(text, pos.x, pos.y);
     }
   } else if (editTool.value === 'highlight') {
-    const rect = pdfCanvas.value.getBoundingClientRect();
-    const pos = {
-      x: (event.clientX - rect.left) / zoom.value,
-      y: (event.clientY - rect.top) / zoom.value
-    };
+    const rect = pageCanvas.getBoundingClientRect();
+    const pos = getCanvasPosition(event, rect, pageCanvas);
+    
+    // Create highlight annotation
+    const highlightWidth = 100;
+    const highlightHeight = annotationSize.value * 3;
+    
+    const ctx = pageCanvas.getContext('2d');
+    ctx.fillStyle = annotationColor.value;
+    ctx.globalAlpha = 0.3;
+    ctx.fillRect(pos.x, pos.y, highlightWidth, highlightHeight);
+    ctx.globalAlpha = 1.0;
     
     // Add highlight annotation
     annotations.value.push({
       type: 'highlight',
+      page: pageNumber,
       position: pos,
+      width: highlightWidth,
+      height: highlightHeight,
       color: annotationColor.value,
       size: annotationSize.value,
-      style: {
-        position: 'absolute',
-        left: `${pos.x}px`,
-        top: `${pos.y}px`,
-        width: '100px',
-        height: `${annotationSize.value * 3}px`,
-        backgroundColor: annotationColor.value,
-        opacity: 0.3,
-        pointerEvents: 'auto',
-        zIndex: 5
-      }
+      canvasCoords: true
     });
   }
 }
 
-function handleCanvasClick(event) {
+function handlePageClick(event, pageNumber, pageCanvas) {
   // Handle canvas clicks for non-edit interactions
+}
+
+// Helper function to get correct canvas coordinates accounting for zoom
+function getCanvasPosition(event, rect, pageCanvas) {
+  // Get the actual canvas dimensions (before CSS scaling)
+  const canvasWidth = pageCanvas.getAttribute('data-original-width') || pageCanvas.width;
+  const canvasHeight = pageCanvas.getAttribute('data-original-height') || pageCanvas.height;
+  
+  // Calculate position relative to the canvas, accounting for zoom scaling
+  const x = ((event.clientX - rect.left) / zoom.value);
+  const y = ((event.clientY - rect.top) / zoom.value);
+  
+  return { x, y };
+}
+
+// Legacy mouse handlers (kept for backward compatibility)
+function handleMouseDown(event) {
+  // This is now handled by individual page handlers
+}
+
+function handleMouseMove(event) {
+  // This is now handled by individual page handlers
+}
+
+function handleMouseUp(event) {
+  // This is now handled by individual page handlers
+}
+
+function handleCanvasClick(event) {
+  // This is now handled by individual page handlers
 }
 
 // Handle scroll for auto-pagination
@@ -947,35 +1001,210 @@ async function saveChanges() {
   try {
     saving.value = true;
     
-    // Save annotations using MuPDF service
-    for (const annotation of annotations.value) {
-      await mupdfService.addAnnotation(currentPage.value, annotation);
+    ElMessage.info('🔄 Starting to save PDF with annotations...');
+    
+    // Check if workspace has git repository configured
+    const currentWorkspace = workspaceStore.currentWorkspace;
+    console.log('Current workspace for saving:', currentWorkspace);
+    
+    if (!currentWorkspace?.git_repo) {
+      ElMessage.error('No git repository configured for this workspace. Please set up a repository in workspace settings.');
+      console.error('Workspace missing git_repo:', currentWorkspace);
+      return;
+    }
+
+    // Get git repository info
+    const gitInfo = getWorkspaceGitInfo(currentWorkspace);
+    if (!gitInfo) {
+      ElMessage.error(`Cannot parse git repository URL: ${currentWorkspace.git_repo}. Please check the repository configuration.`);
+      return;
     }
     
-    // Save the document
-    const result = await mupdfService.saveDocument();
-    
-    ElMessage.success('PDF changes saved successfully');
-    emit('save', {
-      annotations: annotations.value,
-      page: currentPage.value,
-      result: result
+    console.log('Using git repository:', gitInfo);
+
+    // Group annotations by page
+    const annotationsByPage = {};
+    annotations.value.forEach(annotation => {
+      const page = annotation.page || 1;
+      if (!annotationsByPage[page]) {
+        annotationsByPage[page] = [];
+      }
+      annotationsByPage[page].push(annotation);
     });
+    
+    // Process annotations for burning into PDF
+    ElMessage.info('📝 Processing annotations for permanent save...');
+    console.log('� Burning annotations into PDF document...');
+    
+    // Generate the edited PDF as ArrayBuffer with annotations burned in
+    ElMessage.info('📄 Generating PDF with annotations...');
+    const pdfBuffer = await mupdfService.saveDocumentWithAnnotations(annotationsByPage);
+    
+    if (!pdfBuffer) {
+      throw new Error('Failed to generate PDF buffer');
+    }
+    
+    console.log('✅ PDF buffer generated:', {
+      size: pdfBuffer.byteLength,
+      type: 'ArrayBuffer',
+      isValidBuffer: pdfBuffer instanceof ArrayBuffer
+    });
+    
+    // Create a simple hash of the buffer to see if it changed
+    const bufferView = new Uint8Array(pdfBuffer.slice(0, 1000)); // First 1KB
+    let simpleHash = 0;
+    for (let i = 0; i < bufferView.length; i++) {
+      simpleHash += bufferView[i];
+    }
+    console.log('📊 PDF buffer hash (first 1KB):', simpleHash, 'annotations processed:', annotations.value.length);
+
+    // Use the existing file path to update the same PDF
+    const originalFilename = props.file.name;
+    
+    // Use the original file path from the file object
+    const uploadPath = props.file.path || props.file.name;
+    
+    console.log('Updating existing PDF file:', {
+      originalFilename,
+      uploadPath,
+      fileObject: props.file
+    });
+    
+    // Get Gitea token from various sources
+    const giteaToken = localStorage.getItem('gitea_token') || 
+                      sessionStorage.getItem('gitea_token') ||
+                      localStorage.getItem('gitea_access_token') ||
+                      currentWorkspace.gitea_token ||
+                      currentWorkspace.git_token ||
+                      import.meta.env.VITE_GITEA_TOKEN;
+    
+    if (!giteaToken) {
+      ElMessage.error('Gitea authentication token not found. Please configure your workspace git access.');
+      console.error('Missing Gitea token. Checked:', {
+        localStorage_gitea_token: !!localStorage.getItem('gitea_token'),
+        sessionStorage_gitea_token: !!sessionStorage.getItem('gitea_token'),
+        localStorage_gitea_access_token: !!localStorage.getItem('gitea_access_token'),
+        workspace_gitea_token: !!currentWorkspace.gitea_token,
+        workspace_git_token: !!currentWorkspace.git_token,
+        env_gitea_token: !!import.meta.env.VITE_GITEA_TOKEN,
+        workspace: currentWorkspace
+      });
+      return;
+    }
+
+    // Upload to Gitea
+    ElMessage.info(`🚀 Uploading to repository: ${gitInfo.repo}...`);
+    const uploadResult = await uploadFileToGitea({
+      giteaHost: gitInfo.host,
+      giteaToken: giteaToken,
+      repoName: gitInfo.repo,
+      filePath: uploadPath,
+      fileContent: pdfBuffer,
+      message: `Update PDF with ${annotations.value.length} annotations`,
+      branch: 'main',
+      authorName: currentWorkspace.created_by_name || 'PDF Editor',
+      authorEmail: currentWorkspace.created_by_email || 'editor@aiworkspace.pro'
+    });
+
+    if (uploadResult.success) {
+      ElMessage({
+        message: `✅ PDF updated with annotations!<br/>📁 Repository: ${gitInfo.repo}<br/>📄 File: ${originalFilename}<br/>🔥 ${annotations.value.length} annotations permanently saved`,
+        type: 'success',
+        duration: 5000,
+        dangerouslyUseHTMLString: true
+      });
+      
+      console.log('✅ PDF update complete:', {
+        filename: originalFilename,
+        path: uploadPath,
+        annotations: annotations.value.length,
+        commitSha: uploadResult.commitSha,
+        repository: `${gitInfo.owner}/${gitInfo.repo}`
+      });
+      
+      // Emit save event with Gitea info
+      emit('save', {
+        annotations: annotations.value,
+        annotationsByPage: annotationsByPage,
+        filename: originalFilename,
+        uploadPath: uploadPath,
+        commitSha: uploadResult.commitSha,
+        fileUrl: uploadResult.fileUrl,
+        downloadUrl: uploadResult.downloadUrl,
+        gitInfo: gitInfo,
+        success: true
+      });
+      
+      // Clear annotations after successful save to prevent duplicate saves
+      annotations.value = [];
+      
+      // Exit edit mode after successful save
+      editMode.value = false;
+    } else {
+      throw new Error('Upload failed');
+    }
     
   } catch (err) {
     console.error('Error saving changes:', err);
-    ElMessage.error('Failed to save changes');
+    
+    if (err.message.includes('Gitea API error')) {
+      ElMessage.error(`Failed to save to repository: ${err.message}`);
+    } else if (err.message.includes('authentication')) {
+      ElMessage.error('Authentication failed. Please check your Gitea token.');
+    } else {
+      ElMessage.error(`Failed to save changes: ${err.message}`);
+    }
   } finally {
     saving.value = false;
   }
 }
 
+function clearAllAnnotations() {
+  annotations.value = [];
+  
+  // Re-render all pages to clear annotations
+  pageCanvases.value.forEach(async (pageCanvas, index) => {
+    if (pageCanvas) {
+      const pageNum = index + 1;
+      await mupdfService.renderPage(pageNum, pageCanvas, 1.0);
+      pageCanvas.style.transform = `scale(${zoom.value})`;
+    }
+  });
+  
+  ElMessage.success('All annotations cleared');
+}
+
 function cancelEdit() {
   editMode.value = false;
-  annotations.value = [];
-  renderPage();
-  ElMessage.info('Edit cancelled');
+  clearAllAnnotations();
+  ElMessage.info('Edit mode cancelled');
 }
+
+// Utility function to get page annotations
+function getPageAnnotations(pageNumber) {
+  return annotations.value.filter(ann => ann.page === pageNumber);
+}
+
+// Utility function to count annotations by type
+const annotationStats = computed(() => {
+  const stats = { text: 0, highlight: 0, draw: 0 };
+  annotations.value.forEach(ann => {
+    if (stats.hasOwnProperty(ann.type)) {
+      stats[ann.type]++;
+    }
+  });
+  return stats;
+});
+
+// Debug computed property for edit mode status
+const editModeDebug = computed(() => {
+  return {
+    editMode: editMode.value,
+    editTool: editTool.value,
+    annotationCount: annotations.value.length,
+    shouldShowToolbar: editMode.value === true
+  };
+});
 
 function retryLoad() {
   initializeMuPDF();
@@ -989,6 +1218,12 @@ watch(() => props.file, () => {
       initializeMuPDF();
     }
   }
+});
+
+// Watch for edit mode changes (debug)
+watch(() => editMode.value, (newVal, oldVal) => {
+  console.log('Edit mode changed:', { from: oldVal, to: newVal });
+  console.log('Current edit debug state:', editModeDebug.value);
 });
 
 // Track if component is mounted
@@ -1035,27 +1270,37 @@ onUnmounted(() => {
 }
 
 .pdf-header {
-  padding: 12px 16px;
   background: white;
   border-bottom: 1px solid #dcdfe6;
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.pdf-header.edit-mode-header {
+  background: linear-gradient(135deg, #f0f9ff 0%, #ffffff 100%);
+  border-bottom: 2px solid #409eff;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.1);
+}
+
+.header-row-1 {
+  padding: 4px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  flex-shrink: 0;
+  gap: 16px;
 }
 
-.pdf-controls {
-  display: flex;
-  gap: 20px;
-  align-items: center;
+.header-row-2 {
+  padding: 6px 16px 8px;
+  background: rgba(64, 158, 255, 0.05);
+  border-top: 1px solid rgba(64, 158, 255, 0.2);
 }
 
-.nav-controls,
 .zoom-controls,
 .search-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .page-info {
@@ -1066,24 +1311,92 @@ onUnmounted(() => {
 }
 
 .zoom-level {
-  font-size: 14px;
+  font-size: 12px;
   color: #606266;
-  min-width: 50px;
+  min-width: 40px;
+  text-align: center;
+  background: #f5f5f5;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.search-results-compact {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.result-count {
+  font-size: 11px;
+  color: #909399;
+  background: #f5f5f5;
+  padding: 2px 4px;
+  border-radius: 3px;
+  min-width: 30px;
   text-align: center;
 }
 
-.search-results {
+.edit-toggle-compact {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: #909399;
 }
 
-.edit-controls {
+.annotation-tools {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tool-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.tool-btn {
+  min-width: 70px;
+  font-size: 11px;
+}
+
+.tool-settings {
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
+
+.annotation-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.current-tool-badge {
+  font-size: 10px;
+  color: #409eff;
+  background: #f0f9ff;
+  padding: 2px 6px;
+  border-radius: 8px;
+  border: 1px solid #409eff;
+  font-weight: bold;
+}
+
+.annotation-count-compact {
+  font-size: 11px;
+  color: #606266;
+  background: #f0f2f5;
+  padding: 2px 6px;
+  border-radius: 8px;
+  min-width: 16px;
+  text-align: center;
+}
+
+.edit-actions-compact {
+  display: flex;
+  gap: 4px;
+}
+
+
 
 .pdf-content {
   flex: 1;
@@ -1096,6 +1409,11 @@ onUnmounted(() => {
   background: #e0e0e0;
   padding: 20px;
   min-height: 0; /* Allow flex item to shrink */
+}
+
+.pdf-content.edit-mode-active {
+  background: #f0f8ff;
+  border: 2px dashed #409eff;
 }
 
 .loading-overlay,
@@ -1170,6 +1488,10 @@ onUnmounted(() => {
   transition: transform 0.2s ease;
 }
 
+.page-canvas:hover {
+  cursor: crosshair;
+}
+
 .all-pages-container {
   display: flex;
   flex-direction: column;
@@ -1221,50 +1543,47 @@ onUnmounted(() => {
   border: none;
 }
 
-.edit-toolbar {
-  padding: 8px 16px;
-  background: white;
-  border-top: 1px solid #dcdfe6;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-shrink: 0;
-}
 
-.tool-group {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.edit-toggle {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  z-index: 100;
-}
 
 /* Responsive styles */
 @media (max-width: 768px) {
-  .pdf-controls {
+  .header-row-1 {
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
     align-items: stretch;
   }
   
-  .nav-controls,
   .zoom-controls,
   .search-controls {
     justify-content: center;
   }
   
-  .edit-toolbar {
+  .annotation-tools {
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
+    align-items: stretch;
   }
   
-  .tool-group {
+  .tool-buttons,
+  .tool-settings,
+  .annotation-info,
+  .edit-actions-compact {
     justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .header-row-1,
+  .header-row-2 {
+    padding: 6px 8px;
+  }
+  
+  .search-controls el-input {
+    width: 120px !important;
+  }
+  
+  .tool-buttons {
+    flex-wrap: wrap;
   }
 }
 </style>

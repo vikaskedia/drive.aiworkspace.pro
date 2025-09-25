@@ -799,7 +799,7 @@ onUnmounted(() => {
   flex: 1;
   overflow: auto;
   position: relative;
-  padding: 16px;
+  padding: 0 8px;
 }
 
 /* Center content for images and other content that needs centering */

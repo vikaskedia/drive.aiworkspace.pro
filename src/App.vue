@@ -4,19 +4,19 @@
       :custom-logo="workspaceLogo" 
       />
     <main class="main-content">
-      <!-- Loading state while checking authentication -->
-      <div v-if="!authCheckDone" class="loading-container">
+      <!-- Loading state while checking authentication (skip for shared-folder) -->
+      <div v-if="!authCheckDone && !isSharedFolderRoute" class="loading-container">
         <div class="loading-message">
           <h2>Loading...</h2>
           <p>Checking your session.</p>
         </div>
       </div>
-      <!-- Not authenticated message -->
-      <div v-else-if="!isAuthenticated" class="not-auth-message">
+      <!-- Not authenticated message (skip for shared-folder) -->
+      <div v-else-if="!isAuthenticated && !isSharedFolderRoute" class="not-auth-message">
         <h2>Sign in required</h2>
         <p>Please log in to access the app.</p>
       </div>
-      <!-- Main content when authenticated -->
+      <!-- Main content when authenticated or shared-folder route -->
       <router-view v-else/>
     </main>
   </div>
@@ -42,16 +42,16 @@ export default {
     const authCheckDone = ref(false)
     const currentWorkspace = ref(null)
 
-    // Computed property for workspace logo
+    // Detect if current route is shared-folder
+    const isSharedFolderRoute = computed(() => route.name === 'SharedFolder')
+
     const workspaceLogo = computed(() => {
       if (currentWorkspace.value?.logo_url) {
         return currentWorkspace.value.logo_url
       }
-      // Fallback to default logo
       return null
     })
 
-    // Watch for route changes to load workspace data
     watch(() => route.params.workspace_id, async (newWorkspaceId) => {
       if (newWorkspaceId && isAuthenticated.value) {
         await loadWorkspaceData(newWorkspaceId)
@@ -83,7 +83,6 @@ export default {
 
     const checkAuth = async () => {
       try {
-        // Check if supabase client is properly initialized
         if (!supabase || !supabase.auth) {
           console.warn('Supabase client not ready, retrying...')
           setTimeout(checkAuth, 100)
@@ -95,8 +94,6 @@ export default {
           isAuthenticated.value = true
           workspaceStore.setUser(user)
           console.log('User authenticated:', user.email)
-          
-          // Load workspace data if we have a workspace_id in the route
           const workspaceId = route.params.workspace_id
           if (workspaceId) {
             await loadWorkspaceData(workspaceId)
@@ -116,11 +113,13 @@ export default {
     }
 
     onMounted(async () => {
-      // Wait a bit for the shared header to initialize supabase
       await new Promise(resolve => setTimeout(resolve, 50))
-      await checkAuth()
-      
-      // Make loadWorkspaces available globally for the shared header
+      // Only check auth if not shared-folder route
+      if (!isSharedFolderRoute.value) {
+        await checkAuth()
+      } else {
+        authCheckDone.value = true
+      }
       if (window) {
         window.loadWorkspaces = workspaceStore.loadWorkspaces
       }
@@ -129,7 +128,8 @@ export default {
     return {
       isAuthenticated,
       authCheckDone,
-      workspaceLogo
+      workspaceLogo,
+      isSharedFolderRoute
     }
   }
 }

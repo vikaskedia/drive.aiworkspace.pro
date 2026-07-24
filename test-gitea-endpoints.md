@@ -14,25 +14,25 @@ You can test these endpoints directly using curl to verify they work:
 ### 1. Commits Endpoint (Corrected)
 ```bash
 curl -H "Authorization: token YOUR_GITEA_API_TOKEN" \
-"https://g.aiworkspace.pro/api/v1/repos/associateattorney/legal-studio/commits?limit=1&sha=main"
+"https://g.grmtech.com/api/v1/repos/associateattorney/legal-studio/commits?limit=1&sha=main"
 ```
 
 ### 2. Branches Endpoint (Alternative)
 ```bash
 curl -H "Authorization: token YOUR_GITEA_API_TOKEN" \
-"https://g.aiworkspace.pro/api/v1/repos/associateattorney/legal-studio/branches/main"
+"https://g.grmtech.com/api/v1/repos/associateattorney/legal-studio/branches/main"
 ```
 
 ### 3. Repository Info
 ```bash
 curl -H "Authorization: token YOUR_GITEA_API_TOKEN" \
-"https://g.aiworkspace.pro/api/v1/repos/associateattorney/legal-studio"
+"https://g.grmtech.com/api/v1/repos/associateattorney/legal-studio"
 ```
 
 ### 4. Contents Endpoint
 ```bash
 curl -H "Authorization: token YOUR_GITEA_API_TOKEN" \
-"https://g.aiworkspace.pro/api/v1/repos/associateattorney/legal-studio/contents/"
+"https://g.grmtech.com/api/v1/repos/associateattorney/legal-studio/contents/"
 ```
 
 ## Expected Responses

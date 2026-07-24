@@ -15,7 +15,7 @@
     name: 'AllWorkspaceFiles',
     methods: {
       goToAllWorkspaces() {
-        window.location.href = 'https://all-ws-dashboard.aiworkspace.pro/all-workspace/dashboard'
+        window.location.href = 'https://all-ws-dashboard.grmtech.com/all-workspace/dashboard'
       }
     }
   };

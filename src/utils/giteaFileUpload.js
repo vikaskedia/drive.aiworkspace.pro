@@ -39,7 +39,7 @@ function arrayBufferToBase64(buffer) {
 /**
  * Upload or update a file to Gitea repository
  * @param {Object} options - Upload options
- * @param {string} options.giteaHost - Gitea host URL (e.g., 'https://g.aiworkspace.pro')
+ * @param {string} options.giteaHost - Gitea host URL (e.g., 'https://g.grmtech.com')
  * @param {string} options.giteaToken - Gitea API token
  * @param {string} options.repoName - Repository name
  * @param {string} options.filePath - File path in repository (e.g., 'documents/file.pdf')
@@ -194,7 +194,7 @@ export function getWorkspaceGitInfo(workspace) {
     
     // Check if it's a full URL or just a repository name
     if (gitRepoValue.startsWith('http://') || gitRepoValue.startsWith('https://')) {
-      // Full URL format: "https://g.aiworkspace.pro/associateattorney/repo-name"
+      // Full URL format: "https://g.grmtech.com/associateattorney/repo-name"
       let cleanUrl = gitRepoValue;
       
       // Remove .git suffix if present
@@ -210,7 +210,7 @@ export function getWorkspaceGitInfo(workspace) {
         throw new Error(`Invalid git_repo URL format: expected at least 4 parts but got ${urlParts.length}. URL: ${gitRepoValue}`);
       }
 
-      // Extract parts: ['https:', 'g.aiworkspace.pro', 'associateattorney', 'repo-name']
+      // Extract parts: ['https:', 'g.grmtech.com', 'associateattorney', 'repo-name']
       repoName = urlParts[urlParts.length - 1];
       owner = urlParts[urlParts.length - 2];
       
@@ -224,7 +224,7 @@ export function getWorkspaceGitInfo(workspace) {
       console.log('Detected repository name format, constructing full URL...');
       
       // Use default Gitea instance and try to get owner from workspace info
-      host = 'https://g.aiworkspace.pro';
+      host = 'https://g.grmtech.com';
       repoName = gitRepoValue;
       
       // Try to determine owner from workspace info

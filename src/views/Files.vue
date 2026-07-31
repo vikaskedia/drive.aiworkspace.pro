@@ -32,7 +32,7 @@ const route = useRoute()
 const workspaceStore = useWorkspaceStore()
 const isAuthenticated = ref(false)
 const authCheckDone = ref(false)
-//const loginUrl = 'https://login.aiworkspace.pro'
+//const loginUrl = 'https://login.grmtech.com'
 
 // Function to fetch workspace by ID
 const fetchWorkspaceById = async (workspaceId, retryCount = 0) => {
